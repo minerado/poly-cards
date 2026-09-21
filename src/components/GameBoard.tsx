@@ -5,6 +5,7 @@ import { setupGame } from "../game/setup";
 import type { CardInstance } from "../game/types";
 import { CardView } from "./CardView";
 import { DrawAnimation } from "./DrawAnimation";
+import { OpponentBoard } from "./OpponentBoard";
 import { PhaseNarrator } from "./PhaseNarrator";
 import { PileView } from "./PileView";
 import { HandFan } from "./HandFan";
@@ -18,7 +19,7 @@ export function GameBoard({ onExitToMenu }: GameBoardProps) {
   const [state, dispatch] = useReducer(gameReducer, undefined, setupGame);
   const [logOpen, setLogOpen] = useState(false);
   const [drawingCard, setDrawingCard] = useState<CardInstance | null>(null);
-  const { player, phase, turn, pendingSacrifices, log, gameOver } = state;
+  const { player, opponent, phase, turn, pendingSacrifices, log, gameOver } = state;
   const population = player.lane.length;
   const topGraveyardCard = player.graveyard[player.graveyard.length - 1];
 
@@ -81,6 +82,21 @@ export function GameBoard({ onExitToMenu }: GameBoardProps) {
           <span>🔨 {player.resources.Labor}</span>
         </div>
         <div className="hud__actions">
+          {(() => {
+            // The button's destination label comes from the active phase's
+            // own definition (game/phases/*.ts), never hardcoded here — a
+            // phase with no nextLabel (mulligan, upkeep) just renders no
+            // button, since it advances through its own UI instead.
+            const nextLabel = findPhaseDef(phase)?.nextLabel;
+            if (!nextLabel) return null;
+            const label =
+              typeof nextLabel === "function" ? nextLabel(state, phaseCtx) : nextLabel;
+            return (
+              <button className="phase-btn" onClick={handleAdvance}>
+                Next <span>{label}</span>
+              </button>
+            );
+          })()}
           <button className="chip-btn" onClick={onExitToMenu}>
             Menu
           </button>
@@ -110,6 +126,10 @@ export function GameBoard({ onExitToMenu }: GameBoardProps) {
         </div>
       )}
 
+      <OpponentBoard opponent={opponent} />
+
+      <div className="board-seam" />
+
       <div className="playfield">
         <div className="side-piles">
           <PileView
@@ -121,7 +141,6 @@ export function GameBoard({ onExitToMenu }: GameBoardProps) {
         </div>
 
         <div className="lane">
-          {player.lane.length === 0 && <p className="empty">No Workers in play.</p>}
           {player.lane.map((card) => {
             const inUpkeep = phase === "upkeep" && pendingSacrifices > 0;
             const canTap = phase === "main" && !card.tapped;
@@ -143,25 +162,10 @@ export function GameBoard({ onExitToMenu }: GameBoardProps) {
             );
           })}
         </div>
-
-        {(() => {
-          // The button's destination label comes from the active phase's
-          // own definition (game/phases/*.ts), never hardcoded here — a
-          // phase with no nextLabel (mulligan, upkeep) just renders no
-          // button, since it advances through its own UI instead.
-          const nextLabel = findPhaseDef(phase)?.nextLabel;
-          if (!nextLabel) return null;
-          const label = typeof nextLabel === "function" ? nextLabel(state, phaseCtx) : nextLabel;
-          return (
-            <button className="phase-btn" onClick={handleAdvance}>
-              Next
-              <span>{label}</span>
-            </button>
-          );
-        })()}
       </div>
 
       <div className="hand-tray">
+        <div className="hand-tray__label">You</div>
         <HandFan
           cards={
             drawingCard

@@ -39,6 +39,22 @@ describe("setupGame", () => {
     expect(state.turn).toBe(1);
     expect(state.gameOver).toBe(false);
   });
+
+  it("deals the opponent a real, independent board — not a copy of the player's", () => {
+    const state = setupGame();
+    expect(state.opponent.hand).toHaveLength(7);
+    expect(state.opponent.lane).toHaveLength(0);
+    expect(state.opponent.deck).toHaveLength(13);
+
+    // Genuinely separate decks, not aliased or mirrored: no shared instance ids.
+    const playerIds = new Set(
+      [...state.player.hand, ...state.player.deck].map((c) => c.instanceId)
+    );
+    const opponentIds = [...state.opponent.hand, ...state.opponent.deck].map(
+      (c) => c.instanceId
+    );
+    expect(opponentIds.some((id) => playerIds.has(id))).toBe(false);
+  });
 });
 
 describe("mulligan", () => {

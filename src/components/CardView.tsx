@@ -7,6 +7,8 @@ interface CardViewProps {
   onClick?: () => void;
   actionLabel?: string;
   highlight?: boolean;
+  /** Renders the card back instead of its face — never actionable regardless of `onClick`. */
+  faceDown?: boolean;
 }
 
 export function CardView({
@@ -15,18 +17,24 @@ export function CardView({
   onClick,
   actionLabel,
   highlight,
+  faceDown,
 }: CardViewProps) {
-  const def = definitionOf(card);
-  const gen = def.components.resourceGenerator;
   const classes = [
     "card",
     `card--${variant}`,
     card.tapped ? "card--tapped" : "",
-    onClick ? "card--actionable" : "",
+    !faceDown && onClick ? "card--actionable" : "",
     highlight ? "card--highlight" : "",
   ]
     .filter(Boolean)
     .join(" ");
+
+  if (faceDown) {
+    return <button type="button" className={`${classes} card--back`} disabled />;
+  }
+
+  const def = definitionOf(card);
+  const gen = def.components.resourceGenerator;
 
   return (
     <button type="button" className={classes} onClick={onClick} disabled={!onClick}>

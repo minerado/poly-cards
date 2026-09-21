@@ -46,6 +46,14 @@ export interface GameState {
   turn: number;
   phase: Phase;
   player: PlayerState;
+  /**
+   * The opponent's board, mirrored on the other side of the table — a real,
+   * independently-dealt PlayerState (their own deck, their own starting
+   * hand), not placeholder data. Purely inert display data for now: no
+   * reducer/phase logic reads or writes it after setup, since they don't
+   * take real turns yet. See game/setup.ts.
+   */
+  opponent: PlayerState;
   /** Food deficit still needing sacrifices this upkeep, if any. */
   pendingSacrifices: number;
   log: string[];

@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "defaultMode": "bypassPermissions",
+    "allow": [
+      "Bash(node .scratch-opponent.mjs)",
+      "Bash(node .scratch-measure.mjs)",
+      "Bash(node .scratch-clean-shot.mjs)"
+    ]
+  }
+}
