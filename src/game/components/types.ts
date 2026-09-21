@@ -39,5 +39,9 @@ export interface CardDefinition {
   id: string;
   name: string;
   image: string;
+  /** Flavor/rules text. Can run long — never rendered on the lane's small card, only in its hover preview. */
+  description?: string;
+  /** Overrides the text box's default font size (px) for cards whose description needs to run smaller to fit. */
+  descriptionFontSize?: number;
   components: ComponentBag;
 }

@@ -11,6 +11,15 @@
   --warn-bg: rgba(240, 180, 41, 0.14);
   --danger: #ef4444;
 
+  /* Card frame — a Magic-style bronze border + parchment text box, kept
+     distinct from the rest of the (dark/purple) UI so cards read as
+     physical objects sitting on the board. */
+  --card-border: #9a7a34;
+  --card-name-bg: #1c1710;
+  --card-name-ink: #f3e9c9;
+  --card-text-bg: #ece0c0;
+  --card-text-ink: #2b2213;
+
   --sans: system-ui, "Segoe UI", Roboto, sans-serif;
   --mono: ui-monospace, Consolas, monospace;
 
@@ -321,17 +330,53 @@ button {
   opacity: 0.6;
 }
 
-/* ---------- Cards ---------- */
+/* ---------- Round badge ----------
+   Shared small round badge for inline glyphs — the turn marker, resource
+   badges, … — styled like Magic's mana symbols: every one is the same
+   shape (see components/RoundBadge.tsx), sized in em so it drops into text
+   of any size; a modifier class only ever changes the color, never the
+   shape. */
+
+.round-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1em;
+  height: 1em;
+  border-radius: 50%;
+  background: #b8b8b8;
+  color: #4a4a4a;
+  vertical-align: middle;
+  box-shadow: 1px 1px 1px rgba(0, 0, 0, 0.45);
+}
+
+.round-badge--food {
+  background: #d9b054;
+  color: #3a2a10;
+}
+
+.round-badge--labor {
+  background: #93a3b3;
+  color: #20262c;
+}
+
+/* ---------- Cards ----------
+   A Magic-style frame: name bar, art window, type line, rules-text box,
+   and a bottom-right stat badge (our stand-in for a P/T box). Every
+   card is this same shape — only its size changes: "Normal" (the base
+   size below) everywhere except the field, where the small "Token" size
+   takes over — see .card--lane. */
 
 .card {
   all: unset;
   box-sizing: border-box;
   display: flex;
   flex-direction: column;
-  width: 118px;
-  border-radius: 8px;
-  border: 1px solid var(--panel-border);
-  background: var(--panel);
+  width: 190px;
+  aspect-ratio: 5 / 7;
+  border-radius: 10px;
+  border: 3px solid var(--card-border);
+  background: var(--card-name-bg);
   overflow: hidden;
   cursor: default;
   position: relative;
@@ -341,8 +386,17 @@ button {
   cursor: pointer;
 }
 
+.card--lane {
+  width: 88px;
+  transition: box-shadow 0.16s ease;
+}
+
+.card--lane:hover {
+  z-index: 40;
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.45);
+}
+
 .card--back {
-  aspect-ratio: 118 / 165;
   cursor: default;
   background: repeating-linear-gradient(
       135deg,
@@ -354,30 +408,83 @@ button {
     #241f2e;
 }
 
+.card__namebar {
+  flex: none;
+  padding: 3px 8px 0;
+  background: var(--card-name-bg);
+}
+
+.card__name {
+  font-weight: 700;
+  font-size: 11px;
+  line-height: 1.3;
+  color: var(--card-name-ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: block;
+}
+
+.card__artbox {
+  flex: none;
+  margin: 4px 6px 0;
+  border: 1px solid var(--card-border);
+  aspect-ratio: 3 / 2;
+  overflow: hidden;
+}
+
+.card--lane .card__artbox {
+  flex: 1;
+  aspect-ratio: auto;
+  margin: 3px 3px 0;
+}
+
 .card__image {
   width: 100%;
-  aspect-ratio: 1;
+  height: 100%;
   object-fit: cover;
   image-rendering: pixelated;
   display: block;
 }
 
-.card__footer {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: 6px 8px 8px;
-}
-
-.card__name {
+.card__typeline {
+  flex: none;
+  padding: 2px 8px;
+  margin-top: 4px;
+  background: var(--card-name-bg);
+  font-size: 9px;
+  line-height: 1.3;
   font-weight: 600;
-  font-size: 12px;
-  color: var(--text-h);
+  color: var(--card-name-ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-.card__ability {
-  font-size: 11px;
-  opacity: 0.75;
+.card__textbox {
+  flex: 1;
+  /* Without this, a flex child's content can force it taller than its
+     flex-computed share regardless of `overflow: hidden` — the one thing
+     that must never happen here, since a long description is the whole
+     point (see CardFace) and the card's own height is fixed. */
+  min-height: 0;
+  margin: 4px 6px 6px;
+  padding: 6px;
+  display: flex;
+  align-items: center;
+  background: var(--card-text-bg);
+  border: 1px solid var(--card-border);
+  border-top: none;
+  border-radius: 0 0 3px 3px;
+  overflow: hidden;
+}
+
+.card__description {
+  margin: 0;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.4;
+  color: var(--card-text-ink);
 }
 
 .card__hint {
@@ -389,11 +496,13 @@ button {
   background: var(--accent);
   color: #1a0b2e;
   font-size: 10px;
+  line-height: 1.3;
   font-weight: 700;
   opacity: 0;
   transform: translateY(-4px);
   transition: opacity 0.12s ease, transform 0.12s ease;
   pointer-events: none;
+  z-index: 4;
 }
 
 .card--actionable:hover .card__hint {
@@ -402,7 +511,36 @@ button {
 }
 
 .card--lane.card--actionable:hover {
-  box-shadow: 0 0 0 2px var(--accent);
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.45), 0 0 0 2px var(--accent);
+}
+
+/* ---------- Lane hover preview ("complete" Normal card, independent of the tiny token) ---------- */
+
+.card-slot {
+  position: relative;
+  display: inline-flex;
+  align-items: flex-end;
+}
+
+/* Gets its shape (size, border, background) from the base .card rule via
+   the extra "card" class on this element — only positioning/reveal is
+   added here, so the preview is always exactly a Normal card. */
+.card__preview {
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 10px);
+  transform: translateX(-50%) translateY(6px) scale(0.94);
+  transform-origin: bottom center;
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.55);
+  opacity: 0;
+  pointer-events: none;
+  z-index: 60;
+  transition: opacity 0.14s ease, transform 0.14s ease;
+}
+
+.card-slot:hover .card__preview {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0) scale(1);
 }
 
 .card--tapped {
@@ -452,7 +590,7 @@ button {
 }
 
 .hand-fan__slot {
-  margin: 0 -20px;
+  margin: 0 -30px;
   transform-origin: bottom center;
   position: relative;
 }
@@ -462,7 +600,7 @@ button {
 }
 
 .card--hand {
-  transform: rotate(var(--rotate)) translateY(var(--drop));
+  transform: rotate(var(--rotate)) translateY(calc(var(--drop) + 172px));
   transition: transform 0.16s ease, box-shadow 0.16s ease;
 }
 
@@ -499,10 +637,13 @@ button {
 
 .mulligan-overlay__hand {
   display: flex;
-  gap: 16px;
-  flex-wrap: wrap;
+  align-items: flex-end;
   justify-content: center;
-  max-width: 90vw;
+  max-width: 96vw;
+  /* Clears room for the dome's rise (and its hover-risen center card)
+     above the box's own layout edge — a transform, so it doesn't push the
+     message via the overlay's flex gap on its own. */
+  margin-top: 48px;
 }
 
 /* Fixed-height footer with both button groups stacked on top of each other
@@ -562,12 +703,14 @@ button {
   box-shadow: none;
 }
 
-.card--mulligan {
-  width: 140px;
+.mulligan-card {
+  margin: 0 -30px;
+  position: relative;
+  transition: transform 0.4s ease-in, opacity 0.4s ease-in;
 }
 
-.mulligan-card {
-  transition: transform 0.4s ease-in, opacity 0.4s ease-in;
+.mulligan-card:hover {
+  z-index: 999 !important;
 }
 
 .mulligan-card--deal {
@@ -577,6 +720,16 @@ button {
 .mulligan-card--discard {
   transform: translateY(180px) scale(0.5);
   opacity: 0;
+}
+
+.card--mulligan {
+  transform: rotate(var(--rotate)) translateY(var(--drop));
+  transition: transform 0.16s ease, box-shadow 0.16s ease;
+}
+
+.mulligan-card:hover .card--mulligan {
+  transform: translateY(calc(var(--drop) - 30px)) scale(1.16) rotate(0deg);
+  box-shadow: 0 16px 30px rgba(0, 0, 0, 0.5);
 }
 
 @keyframes card-deal-in {

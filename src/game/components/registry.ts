@@ -11,6 +11,7 @@ export const CARD_REGISTRY: Record<string, CardDefinition> = {
     id: "farmer",
     name: "Farmer",
     image: "/cards/farmer.png",
+    description: "[turn]: Generate [food-badge]",
     components: {
       resourceGenerator: { resource: "Food", amount: 1 },
       workerTier: { tier: "Basic" },
@@ -21,6 +22,7 @@ export const CARD_REGISTRY: Record<string, CardDefinition> = {
     id: "builder",
     name: "Builder",
     image: "/cards/builder.png",
+    description: "[turn]: Generate [labor-badge]",
     components: {
       resourceGenerator: { resource: "Labor", amount: 1 },
       workerTier: { tier: "Basic" },

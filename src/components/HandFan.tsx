@@ -1,6 +1,7 @@
 import type { CSSProperties } from "react";
 import type { CardInstance } from "../game/types";
 import { CardView } from "./CardView";
+import { fanSlot } from "./fanLayout";
 
 interface HandFanProps {
   cards: CardInstance[];
@@ -10,25 +11,17 @@ interface HandFanProps {
   faceDown?: boolean;
 }
 
-const MAX_ROTATION = 6;
-const ROTATION_STEP = 4;
-const RISE_FACTOR = 4;
-
 export function HandFan({ cards, onCardClick, actionLabel, faceDown }: HandFanProps) {
-  const center = (cards.length - 1) / 2;
-
   return (
     <div className={`hand-fan ${faceDown ? "hand-fan--static" : ""}`}>
       {cards.map((card, index) => {
-        const offset = index - center;
-        const rotate = Math.max(-MAX_ROTATION, Math.min(MAX_ROTATION, offset * ROTATION_STEP));
         // Edge cards sit on the tray's baseline; the center card rises above
         // it, forming a dome. Nothing ever moves below baseline, so the fan
         // can't clip past the (viewport-flush) bottom of the tray.
-        const dropPx = -(center * center - offset * offset) * RISE_FACTOR;
+        const { rotate, drop } = fanSlot(index, cards.length);
         const style = {
           "--rotate": `${rotate}deg`,
-          "--drop": `${dropPx}px`,
+          "--drop": `${drop}px`,
           zIndex: index,
         } as CSSProperties;
 

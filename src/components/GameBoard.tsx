@@ -8,6 +8,7 @@ import { DrawAnimation } from "./DrawAnimation";
 import { OpponentBoard } from "./OpponentBoard";
 import { PhaseNarrator } from "./PhaseNarrator";
 import { PileView } from "./PileView";
+import { FoodBadge, LaborBadge } from "./ResourceBadges";
 import { HandFan } from "./HandFan";
 import { MulliganOverlay } from "./MulliganOverlay";
 
@@ -78,8 +79,12 @@ export function GameBoard({ onExitToMenu }: GameBoardProps) {
             Turn {turn} · <strong className="hud__phase">{phase.toUpperCase()}</strong>
           </span>
           <span>Population {population}</span>
-          <span>🌾 {player.resources.Food}</span>
-          <span>🔨 {player.resources.Labor}</span>
+          <span>
+            <FoodBadge /> {player.resources.Food}
+          </span>
+          <span>
+            <LaborBadge /> {player.resources.Labor}
+          </span>
         </div>
         <div className="hud__actions">
           {(() => {

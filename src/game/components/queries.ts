@@ -14,3 +14,12 @@ export function definitionOf(card: CardInstance): CardDefinition {
 export function resourceGeneratedBy(card: CardInstance): ResourceGenerator | undefined {
   return definitionOf(card).components.resourceGenerator;
 }
+
+/** "General — Specific, Specific" for a card's type line, if it has one. */
+export function typeLineOf(def: CardDefinition): string | undefined {
+  const types = def.components.cardTypes;
+  if (!types) return undefined;
+  return types.specific.length > 0
+    ? `${types.general} — ${types.specific.join(", ")}`
+    : types.general;
+}

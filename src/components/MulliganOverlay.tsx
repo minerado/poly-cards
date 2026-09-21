@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
+import type { CSSProperties } from "react";
 import type { CardInstance } from "../game/types";
 import { CardView } from "./CardView";
+import { fanSlot } from "./fanLayout";
 
 interface MulliganOverlayProps {
   hand: CardInstance[];
@@ -71,13 +73,20 @@ export function MulliganOverlay({ hand, onConfirm, onFinish }: MulliganOverlayPr
           ]
             .filter(Boolean)
             .join(" ");
+          // Same fan math as the hand tray, so this reads as the same
+          // gesture — just laid out flat (no peek/push, and a gentler dome:
+          // this screen has less vertical room to work with, sandwiched
+          // between the message above and the confirm buttons below).
+          const { rotate, drop } = fanSlot(index, hand.length, { riseFactor: 2 });
+          const style = {
+            "--rotate": `${rotate}deg`,
+            "--drop": `${drop}px`,
+            animationDelay: `${index * DEAL_STAGGER_MS}ms`,
+            zIndex: index,
+          } as CSSProperties;
 
           return (
-            <div
-              key={card.instanceId}
-              className={classes}
-              style={{ animationDelay: `${index * DEAL_STAGGER_MS}ms` }}
-            >
+            <div key={card.instanceId} className={classes} style={style}>
               <CardView card={card} variant="mulligan" />
             </div>
           );
