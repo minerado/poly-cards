@@ -1,6 +1,11 @@
-import { useReducer, useState } from "react";
-import { gameReducer, setupGame } from "../game/engine";
+import { useEffect, useLayoutEffect, useReducer, useRef, useState } from "react";
+import { definitionOf } from "../game/components/queries";
+import { findPhaseDef, gameReducer, phaseCtx } from "../game/phases";
+import { setupGame } from "../game/setup";
+import type { CardInstance } from "../game/types";
 import { CardView } from "./CardView";
+import { DrawAnimation } from "./DrawAnimation";
+import { PhaseNarrator } from "./PhaseNarrator";
 import { PileView } from "./PileView";
 import { HandFan } from "./HandFan";
 import { MulliganOverlay } from "./MulliganOverlay";
@@ -12,9 +17,56 @@ interface GameBoardProps {
 export function GameBoard({ onExitToMenu }: GameBoardProps) {
   const [state, dispatch] = useReducer(gameReducer, undefined, setupGame);
   const [logOpen, setLogOpen] = useState(false);
+  const [drawingCard, setDrawingCard] = useState<CardInstance | null>(null);
   const { player, phase, turn, pendingSacrifices, log, gameOver } = state;
   const population = player.lane.length;
   const topGraveyardCard = player.graveyard[player.graveyard.length - 1];
+
+  // Set right before dispatching a Draw-phase ADVANCE; consumed by the
+  // layout effect below the moment the resulting `player.hand` lands, so
+  // the newly drawn card can be identified and held back from the hand
+  // fan until its flight animation finishes. Same pattern as
+  // MulliganOverlay's pendingConfirmRef, for the same reason: reacting to
+  // the actual prop change beats guessing with a timer.
+  const pendingDrawRef = useRef<string[] | null>(null);
+
+  useLayoutEffect(() => {
+    const beforeIds = pendingDrawRef.current;
+    if (!beforeIds) return;
+    pendingDrawRef.current = null;
+    const fresh = player.hand.find((c) => !beforeIds.includes(c.instanceId));
+    if (fresh) setDrawingCard(fresh);
+  }, [player.hand]);
+
+  function handleAdvance() {
+    if (phase === "draw") {
+      pendingDrawRef.current = player.hand.map((c) => c.instanceId);
+    }
+    dispatch({ type: "ADVANCE" });
+  }
+
+  // Every phase change re-checks its own narrator config (game/phases/*.ts)
+  // — this is the whole mechanism, no per-phase special-casing here. A
+  // phase with `autoAdvance` gets nudged forward automatically once its
+  // announcement has shown for `delayMs`; one without (Main's "Your Turn")
+  // just fades on its own.
+  const [narrator, setNarrator] = useState<{ message: string; delayMs: number } | null>(null);
+
+  useEffect(() => {
+    const def = findPhaseDef(phase)?.narrator;
+    if (!def) {
+      setNarrator(null);
+      return;
+    }
+    setNarrator({ message: def.message, delayMs: def.delayMs });
+    const t = setTimeout(() => {
+      setNarrator(null);
+      if (def.autoAdvance) handleAdvance();
+    }, def.delayMs);
+    return () => clearTimeout(t);
+    // Intentionally re-runs only on phase change: nothing else can happen
+    // mid-narrator, since these phases render no interactive UI.
+  }, [phase]);
 
   return (
     <div className="board">
@@ -63,7 +115,7 @@ export function GameBoard({ onExitToMenu }: GameBoardProps) {
           <PileView
             kind="graveyard"
             count={player.graveyard.length}
-            topLabel={topGraveyardCard?.kind}
+            topLabel={topGraveyardCard && definitionOf(topGraveyardCard).name}
           />
           <PileView kind="deck" count={player.deck.length} />
         </div>
@@ -92,35 +144,30 @@ export function GameBoard({ onExitToMenu }: GameBoardProps) {
           })}
         </div>
 
-        {phase === "draw" && (
-          <button className="phase-btn" onClick={() => dispatch({ type: "DRAW_CARD" })}>
-            Next
-            <span>Draw</span>
-          </button>
-        )}
-        {phase === "main" && (
-          <button className="phase-btn" onClick={() => dispatch({ type: "END_MAIN_PHASE" })}>
-            Next
-            <span>To Upkeep</span>
-          </button>
-        )}
-        {phase === "warfare" && (
-          <button className="phase-btn" onClick={() => dispatch({ type: "END_WARFARE_PHASE" })}>
-            Next
-            <span>To End</span>
-          </button>
-        )}
-        {phase === "end" && (
-          <button className="phase-btn" onClick={() => dispatch({ type: "END_TURN" })}>
-            Next
-            <span>End Turn</span>
-          </button>
-        )}
+        {(() => {
+          // The button's destination label comes from the active phase's
+          // own definition (game/phases/*.ts), never hardcoded here — a
+          // phase with no nextLabel (mulligan, upkeep) just renders no
+          // button, since it advances through its own UI instead.
+          const nextLabel = findPhaseDef(phase)?.nextLabel;
+          if (!nextLabel) return null;
+          const label = typeof nextLabel === "function" ? nextLabel(state, phaseCtx) : nextLabel;
+          return (
+            <button className="phase-btn" onClick={handleAdvance}>
+              Next
+              <span>{label}</span>
+            </button>
+          );
+        })()}
       </div>
 
       <div className="hand-tray">
         <HandFan
-          cards={player.hand}
+          cards={
+            drawingCard
+              ? player.hand.filter((c) => c.instanceId !== drawingCard.instanceId)
+              : player.hand
+          }
           actionLabel="Place"
           onCardClick={
             phase === "main" && !player.hasPlacedWorkerThisTurn
@@ -129,6 +176,12 @@ export function GameBoard({ onExitToMenu }: GameBoardProps) {
           }
         />
       </div>
+
+      {drawingCard && (
+        <DrawAnimation card={drawingCard} onDone={() => setDrawingCard(null)} />
+      )}
+
+      {narrator && <PhaseNarrator message={narrator.message} durationMs={narrator.delayMs} />}
 
       {phase === "mulligan" && (
         <MulliganOverlay

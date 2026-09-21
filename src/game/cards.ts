@@ -1,22 +1,17 @@
-import type { CardDefinition, CardInstance, WorkerKind } from "./types";
-
-export const CARD_DEFINITIONS: Record<WorkerKind, CardDefinition> = {
-  Farmer: { kind: "Farmer", generates: "Food", amount: 1, image: "/cards/farmer.png" },
-  Builder: { kind: "Builder", generates: "Labor", amount: 1, image: "/cards/builder.png" },
-};
+import type { CardInstance } from "./types";
 
 let nextInstanceId = 0;
 
-function createInstance(kind: WorkerKind): CardInstance {
+function createInstance(defId: string): CardInstance {
   nextInstanceId += 1;
-  return { instanceId: `${kind}-${nextInstanceId}`, kind, tapped: false };
+  return { instanceId: `${defId}-${nextInstanceId}`, defId, tapped: false };
 }
 
 /** Starter deck: 10 Farmers, 10 Builders. */
 export function buildStarterDeck(): CardInstance[] {
   const cards: CardInstance[] = [];
-  for (let i = 0; i < 10; i += 1) cards.push(createInstance("Farmer"));
-  for (let i = 0; i < 10; i += 1) cards.push(createInstance("Builder"));
+  for (let i = 0; i < 10; i += 1) cards.push(createInstance("farmer"));
+  for (let i = 0; i < 10; i += 1) cards.push(createInstance("builder"));
   return shuffle(cards);
 }
 

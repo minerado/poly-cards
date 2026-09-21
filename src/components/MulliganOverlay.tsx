@@ -102,7 +102,7 @@ export function MulliganOverlay({ hand, onConfirm, onFinish }: MulliganOverlayPr
             onClick={handleMulligan}
             disabled={!canMulligan}
           >
-            Mulligan
+            Redraw
           </button>
         </div>
       </div>

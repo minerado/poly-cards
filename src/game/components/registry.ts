@@ -1,0 +1,30 @@
+import type { CardDefinition } from "./types";
+
+/**
+ * The card pool. Adding a new card is one more entry here — a data
+ * declaration, not a code change. Nothing outside this file and
+ * queries.ts should ever need to know a card's id by name; game logic
+ * asks "does this card have component X", not "is this a Farmer".
+ */
+export const CARD_REGISTRY: Record<string, CardDefinition> = {
+  farmer: {
+    id: "farmer",
+    name: "Farmer",
+    image: "/cards/farmer.png",
+    components: {
+      resourceGenerator: { resource: "Food", amount: 1 },
+      workerTier: { tier: "Basic" },
+      cardTypes: { general: "Worker", specific: ["Farmer"] },
+    },
+  },
+  builder: {
+    id: "builder",
+    name: "Builder",
+    image: "/cards/builder.png",
+    components: {
+      resourceGenerator: { resource: "Labor", amount: 1 },
+      workerTier: { tier: "Basic" },
+      cardTypes: { general: "Worker", specific: ["Builder"] },
+    },
+  },
+};

@@ -734,3 +734,80 @@ button {
 .menu-screen__item--primary:hover {
   filter: brightness(1.15);
 }
+
+/* ---------- Draw flight ---------- */
+
+.draw-flight {
+  position: fixed;
+  top: 62vh;
+  left: 60px;
+  z-index: 300;
+  pointer-events: none;
+  perspective: 1400px;
+}
+
+.draw-flight__card {
+  transform-style: preserve-3d;
+  animation: draw-flight-move 0.9s cubic-bezier(0.33, 0.68, 0.3, 1) forwards;
+  filter: drop-shadow(0 20px 30px rgba(0, 0, 0, 0.5));
+}
+
+@keyframes draw-flight-move {
+  0% {
+    transform: translate(0, 0) scale(0.6) rotateY(-180deg);
+    opacity: 0.5;
+  }
+  40% {
+    transform: translate(28vw, -20vh) scale(1.7) rotateY(0deg);
+    opacity: 1;
+  }
+  78% {
+    transform: translate(46vw, 6vh) scale(1) rotateY(0deg);
+    opacity: 1;
+  }
+  100% {
+    transform: translate(50vw, 18vh) scale(0.5) rotateY(0deg);
+    opacity: 0;
+  }
+}
+
+/* ---------- Phase narrator ---------- */
+
+.phase-narrator {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  z-index: 250;
+}
+
+.phase-narrator__text {
+  font-size: 34px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-h);
+  text-shadow: 0 0 30px rgba(192, 132, 252, 0.6), 0 4px 14px rgba(0, 0, 0, 0.6);
+  animation: phase-narrator-inout var(--narrator-duration) ease-in-out both;
+}
+
+@keyframes phase-narrator-inout {
+  0% {
+    opacity: 0;
+    transform: scale(0.85);
+  }
+  18% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  72% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.05);
+  }
+}

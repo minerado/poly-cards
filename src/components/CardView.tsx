@@ -1,4 +1,4 @@
-import { CARD_DEFINITIONS } from "../game/cards";
+import { definitionOf } from "../game/components/queries";
 import type { CardInstance } from "../game/types";
 
 interface CardViewProps {
@@ -16,7 +16,8 @@ export function CardView({
   actionLabel,
   highlight,
 }: CardViewProps) {
-  const def = CARD_DEFINITIONS[card.kind];
+  const def = definitionOf(card);
+  const gen = def.components.resourceGenerator;
   const classes = [
     "card",
     `card--${variant}`,
@@ -29,12 +30,14 @@ export function CardView({
 
   return (
     <button type="button" className={classes} onClick={onClick} disabled={!onClick}>
-      <img className="card__image" src={def.image} alt={card.kind} draggable={false} />
+      <img className="card__image" src={def.image} alt={def.name} draggable={false} />
       <div className="card__footer">
-        <span className="card__name">{card.kind}</span>
-        <span className="card__ability">
-          🔄 {def.amount} {def.generates}
-        </span>
+        <span className="card__name">{def.name}</span>
+        {gen && (
+          <span className="card__ability">
+            🔄 {gen.amount} {gen.resource}
+          </span>
+        )}
       </div>
       {onClick && actionLabel && <span className="card__hint">{actionLabel}</span>}
     </button>

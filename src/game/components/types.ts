@@ -1,0 +1,43 @@
+import type { ResourceType } from "../types";
+
+/**
+ * A component is one small, single-purpose slice of data describing
+ * something a card can do or be. A card's definition carries an
+ * open-ended bag of these instead of a fixed shape — adding a new kind of
+ * card is authoring data (a new registry entry with whatever components it
+ * needs), never touching a switch statement or extending a union type.
+ * See game/components/registry.ts for the actual card data, and
+ * game/components/queries.ts for the small pure functions ("systems")
+ * that read components back out.
+ */
+
+export interface ResourceGenerator {
+  resource: ResourceType;
+  amount: number;
+}
+
+export interface WorkerTier {
+  tier: "Basic" | "Specialized";
+}
+
+/** Mirrors the design docs' "Dimensions" concept: general type + stackable specific types. */
+export interface CardTypes {
+  general: string; // "Worker" today; "Human" etc. later
+  specific: string[]; // e.g. ["Farmer"] — an array since specific types can stack
+}
+
+export interface ComponentBag {
+  resourceGenerator?: ResourceGenerator;
+  workerTier?: WorkerTier;
+  cardTypes?: CardTypes;
+  // Add new components here as new mechanics are designed. Each addition
+  // is a new optional field — existing components and the cards that use
+  // them never need to change.
+}
+
+export interface CardDefinition {
+  id: string;
+  name: string;
+  image: string;
+  components: ComponentBag;
+}
