@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useReducer, useRef, useState } from "react";
+import { Menu, ScrollText } from "lucide-react";
 import { definitionOf } from "../game/components/queries";
 import { findPhaseDef, gameReducer, phaseCtx } from "../game/phases";
 import { setupGame } from "../game/setup";
@@ -11,6 +12,8 @@ import { PileView } from "./PileView";
 import { FoodBadge, LaborBadge } from "./ResourceBadges";
 import { HandFan } from "./HandFan";
 import { MulliganOverlay } from "./MulliganOverlay";
+import { HandTuningProvider } from "../dev/handTuning";
+import { HandTuningPanel } from "../dev/HandTuningPanel";
 
 interface GameBoardProps {
   onExitToMenu: () => void;
@@ -21,7 +24,6 @@ export function GameBoard({ onExitToMenu }: GameBoardProps) {
   const [logOpen, setLogOpen] = useState(false);
   const [drawingCard, setDrawingCard] = useState<CardInstance | null>(null);
   const { player, opponent, phase, turn, pendingSacrifices, log, gameOver } = state;
-  const population = player.lane.length;
   const topGraveyardCard = player.graveyard[player.graveyard.length - 1];
 
   // Set right before dispatching a Draw-phase ADVANCE; consumed by the
@@ -71,22 +73,12 @@ export function GameBoard({ onExitToMenu }: GameBoardProps) {
   }, [phase]);
 
   return (
-    <div className="board">
-      <header className="hud">
-        <div className="hud__title">Poly Cards — v0</div>
-        <div className="hud__stats">
-          <span>
+    <HandTuningProvider>
+      <div className="board">
+        <div className="corner corner--top-left">
+          <span className="turn-pill">
             Turn {turn} · <strong className="hud__phase">{phase.toUpperCase()}</strong>
           </span>
-          <span>Population {population}</span>
-          <span>
-            <FoodBadge /> {player.resources.Food}
-          </span>
-          <span>
-            <LaborBadge /> {player.resources.Labor}
-          </span>
-        </div>
-        <div className="hud__actions">
           {(() => {
             // The button's destination label comes from the active phase's
             // own definition (game/phases/*.ts), never hardcoded here — a
@@ -102,118 +94,130 @@ export function GameBoard({ onExitToMenu }: GameBoardProps) {
               </button>
             );
           })()}
-          <button className="chip-btn" onClick={onExitToMenu}>
-            Menu
+        </div>
+
+        <div className="corner corner--top-right">
+          <button className="icon-btn" onClick={onExitToMenu} title="Menu">
+            <Menu size={16} />
           </button>
-          <button className="chip-btn" onClick={() => setLogOpen((v) => !v)}>
-            Log
+          <button className="icon-btn" onClick={() => setLogOpen((v) => !v)} title="Log">
+            <ScrollText size={16} />
           </button>
-        </div>
-      </header>
-
-      {logOpen && (
-        <aside className="log-panel">
-          <ul>
-            {log
-              .slice()
-              .reverse()
-              .map((entry, i) => (
-                <li key={i}>{entry}</li>
-              ))}
-          </ul>
-        </aside>
-      )}
-
-      {phase === "upkeep" && !gameOver && (
-        <div className="upkeep-banner">
-          Short {pendingSacrifices} Food — click {pendingSacrifices} Worker(s) in the
-          lane to sacrifice.
-        </div>
-      )}
-
-      <OpponentBoard opponent={opponent} />
-
-      <div className="board-seam" />
-
-      <div className="playfield">
-        <div className="side-piles">
-          <PileView
-            kind="graveyard"
-            count={player.graveyard.length}
-            topLabel={topGraveyardCard && definitionOf(topGraveyardCard).name}
-          />
-          <PileView kind="deck" count={player.deck.length} />
+          <HandTuningPanel />
         </div>
 
-        <div className="lane">
-          {player.lane.map((card) => {
-            const inUpkeep = phase === "upkeep" && pendingSacrifices > 0;
-            const canTap = phase === "main" && !card.tapped;
-            const onClick = inUpkeep
-              ? () => dispatch({ type: "SACRIFICE_WORKER", instanceId: card.instanceId })
-              : canTap
-              ? () => dispatch({ type: "TAP_WORKER", instanceId: card.instanceId })
-              : undefined;
-
-            return (
-              <CardView
-                key={card.instanceId}
-                card={card}
-                variant="lane"
-                onClick={onClick}
-                highlight={inUpkeep}
-                actionLabel={inUpkeep ? "Sacrifice" : canTap ? "Tap" : undefined}
-              />
-            );
-          })}
-        </div>
-      </div>
-
-      <div className="hand-tray">
-        <div className="hand-tray__label">You</div>
-        <HandFan
-          cards={
-            drawingCard
-              ? player.hand.filter((c) => c.instanceId !== drawingCard.instanceId)
-              : player.hand
-          }
-          actionLabel="Place"
-          onCardClick={
-            phase === "main" && !player.hasPlacedWorkerThisTurn
-              ? (instanceId) => dispatch({ type: "PLACE_WORKER", instanceId })
-              : undefined
-          }
-        />
-      </div>
-
-      {drawingCard && (
-        <DrawAnimation card={drawingCard} onDone={() => setDrawingCard(null)} />
-      )}
-
-      {narrator && <PhaseNarrator message={narrator.message} durationMs={narrator.delayMs} />}
-
-      {phase === "mulligan" && (
-        <MulliganOverlay
-          hand={player.hand}
-          onConfirm={() => dispatch({ type: "CONFIRM_MULLIGAN" })}
-          onFinish={() => dispatch({ type: "FINISH_MULLIGAN" })}
-        />
-      )}
-
-      {gameOver && (
-        <div className="overlay">
-          <div className="overlay__card">
-            <h2>Game Over</h2>
-            <p>Your population collapsed to 0.</p>
-            <div className="overlay__actions">
-              <button onClick={() => dispatch({ type: "RESTART" })}>Restart</button>
-              <button className="overlay__secondary" onClick={onExitToMenu}>
-                Main Menu
-              </button>
-            </div>
+        <div className="corner corner--bottom-right">
+          <div className="resource-chip">
+            <FoodBadge /> {player.resources.Food}
+          </div>
+          <div className="resource-chip">
+            <LaborBadge /> {player.resources.Labor}
           </div>
         </div>
-      )}
-    </div>
+
+        {logOpen && (
+          <aside className="log-panel">
+            <ul>
+              {log
+                .slice()
+                .reverse()
+                .map((entry, i) => (
+                  <li key={i}>{entry}</li>
+                ))}
+            </ul>
+          </aside>
+        )}
+
+        {phase === "upkeep" && !gameOver && (
+          <div className="upkeep-banner">
+            Short {pendingSacrifices} Food — click {pendingSacrifices} Worker(s) in the
+            lane to sacrifice.
+          </div>
+        )}
+
+        <OpponentBoard opponent={opponent} />
+
+        <div className="board-seam" />
+
+        <div className="playfield">
+          <div className="lane">
+            {player.lane.map((card) => {
+              const inUpkeep = phase === "upkeep" && pendingSacrifices > 0;
+              const canTap = phase === "main" && !card.tapped;
+              const onClick = inUpkeep
+                ? () => dispatch({ type: "SACRIFICE_WORKER", instanceId: card.instanceId })
+                : canTap
+                ? () => dispatch({ type: "TAP_WORKER", instanceId: card.instanceId })
+                : undefined;
+
+              return (
+                <CardView
+                  key={card.instanceId}
+                  card={card}
+                  variant="lane"
+                  onClick={onClick}
+                  highlight={inUpkeep}
+                  actionLabel={inUpkeep ? "Sacrifice" : canTap ? "Tap" : undefined}
+                />
+              );
+            })}
+          </div>
+        </div>
+
+        <div className="hand-tray">
+          <div className="hand-tray__label">You</div>
+          <div className="side-piles">
+            <PileView
+              kind="graveyard"
+              count={player.graveyard.length}
+              topLabel={topGraveyardCard && definitionOf(topGraveyardCard).name}
+            />
+            <PileView kind="deck" count={player.deck.length} />
+          </div>
+          <HandFan
+            cards={
+              drawingCard
+                ? player.hand.filter((c) => c.instanceId !== drawingCard.instanceId)
+                : player.hand
+            }
+            actionLabel="Place"
+            onCardClick={
+              phase === "main" && !player.hasPlacedWorkerThisTurn
+                ? (instanceId) => dispatch({ type: "PLACE_WORKER", instanceId })
+                : undefined
+            }
+          />
+        </div>
+
+        {drawingCard && (
+          <DrawAnimation card={drawingCard} onDone={() => setDrawingCard(null)} />
+        )}
+
+        {narrator && <PhaseNarrator message={narrator.message} durationMs={narrator.delayMs} />}
+
+        {phase === "mulligan" && (
+          <MulliganOverlay
+            hand={player.hand}
+            onConfirm={() => dispatch({ type: "CONFIRM_MULLIGAN" })}
+            onFinish={() => dispatch({ type: "FINISH_MULLIGAN" })}
+          />
+        )}
+
+        {gameOver && (
+          <div className="overlay">
+            <div className="overlay__card">
+              <h2>Game Over</h2>
+              <p>Your population collapsed to 0.</p>
+              <div className="overlay__actions">
+                <button onClick={() => dispatch({ type: "RESTART" })}>Restart</button>
+                <button className="overlay__secondary" onClick={onExitToMenu}>
+                  Main Menu
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    </HandTuningProvider>
   );
 }

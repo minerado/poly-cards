@@ -11,9 +11,8 @@ export function PileView({ kind, count, topLabel }: PileViewProps) {
         {kind === "graveyard" && topLabel && (
           <span className="pile__top-label">{topLabel}</span>
         )}
+        <span className="pile__count">{count}</span>
       </div>
-      <span className="pile__count">{count}</span>
-      <span className="pile__label">{kind === "deck" ? "Deck" : "Graveyard"}</span>
     </div>
   );
 }

@@ -20,11 +20,15 @@ export interface FanSlot {
 export function fanSlot(
   index: number,
   total: number,
-  { riseFactor = RISE_FACTOR }: { riseFactor?: number } = {},
+  {
+    riseFactor = RISE_FACTOR,
+    maxRotation = MAX_ROTATION,
+    rotationStep = ROTATION_STEP,
+  }: { riseFactor?: number; maxRotation?: number; rotationStep?: number } = {},
 ): FanSlot {
   const center = (total - 1) / 2;
   const offset = index - center;
-  const rotate = Math.max(-MAX_ROTATION, Math.min(MAX_ROTATION, offset * ROTATION_STEP));
+  const rotate = Math.max(-maxRotation, Math.min(maxRotation, offset * rotationStep));
   const drop = -(center * center - offset * offset) * riseFactor;
   return { rotate, drop };
 }

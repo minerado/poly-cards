@@ -60,65 +60,86 @@ button {
   height: 100vh;
   height: 100svh;
   display: grid;
-  grid-template-rows: auto auto auto 1fr auto;
+  grid-template-rows: auto 1fr auto;
   background: linear-gradient(rgba(10, 9, 14, 0.72), rgba(10, 9, 14, 0.82)),
     url("/board/board-bg.jpg") center / cover no-repeat;
   position: relative;
   overflow: hidden;
 }
 
-/* ---------- HUD ---------- */
+/* ---------- Floating corner controls (replaces the old top HUD bar) ---------- */
 
-.hud {
+.corner {
+  position: absolute;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 10px 18px;
+  gap: 8px;
+  z-index: 30;
+}
+
+.corner--top-left {
+  top: 12px;
+  left: 12px;
+}
+
+.corner--top-right {
+  top: 12px;
+  right: 12px;
+}
+
+.corner--bottom-right {
+  bottom: 16px;
+  right: 16px;
+}
+
+.turn-pill {
+  padding: 6px 12px;
+  border-radius: 999px;
   background: var(--panel);
-  border-bottom: 1px solid var(--panel-border);
-  z-index: 20;
-}
-
-.hud__title {
-  font-weight: 600;
-  color: var(--text-h);
-  font-size: 15px;
-}
-
-.hud__stats {
-  display: flex;
-  gap: 18px;
+  border: 1px solid var(--panel-border);
   font-family: var(--mono);
   font-size: 13px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
 }
 
 .hud__phase {
   color: var(--accent);
 }
 
-.hud__actions {
+.icon-btn {
+  width: 30px;
+  height: 30px;
   display: flex;
   align-items: center;
-  gap: 10px;
-}
-
-.chip-btn {
-  padding: 6px 12px;
-  border-radius: 6px;
+  justify-content: center;
+  border-radius: 8px;
   border: 1px solid var(--panel-border);
-  background: transparent;
+  background: var(--panel);
+  color: var(--text);
   cursor: pointer;
-  font-size: 13px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
 }
 
-.chip-btn:hover {
+.icon-btn:hover {
   border-color: var(--accent);
+}
+
+.resource-chip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  font-family: var(--mono);
+  font-size: 13px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
 }
 
 .log-panel {
   position: absolute;
-  top: 52px;
+  top: 50px;
   right: 12px;
   width: 300px;
   max-height: 55vh;
@@ -148,7 +169,7 @@ button {
 
 .upkeep-banner {
   position: absolute;
-  top: 60px;
+  top: 16px;
   left: 50%;
   transform: translateX(-50%);
   padding: 8px 16px;
@@ -164,13 +185,16 @@ button {
 
 .opponent-board {
   position: relative;
-  padding: 4px 24px 0;
+  /* Clears the floating top corner controls, which now float over the
+     board instead of sitting in a dedicated header row. */
+  padding: 48px 24px 0;
   z-index: 5;
 }
 
 .opponent-board__label {
   position: absolute;
-  top: 2px;
+  /* Clears the floating top-left turn pill (see .opponent-board's padding). */
+  top: 52px;
   left: 16px;
   font-size: 11px;
   text-transform: uppercase;
@@ -317,17 +341,29 @@ button {
   color: var(--text);
 }
 
+/* Hidden until the pile is hovered — same hover-reveal pattern as
+   .card__hint, so the count doesn't need a permanent text label under
+   every pile to be readable. */
 .pile__count {
+  position: absolute;
+  bottom: 4px;
+  right: 4px;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
   font-family: var(--mono);
-  font-size: 12px;
+  font-size: 11px;
   color: var(--text-h);
+  opacity: 0;
+  transform: translateY(4px);
+  transition: opacity 0.12s ease, transform 0.12s ease;
+  pointer-events: none;
 }
 
-.pile__label {
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  opacity: 0.6;
+.pile:hover .pile__count {
+  opacity: 1;
+  transform: translateY(0);
 }
 
 /* ---------- Round badge ----------
@@ -372,7 +408,15 @@ button {
   box-sizing: border-box;
   display: flex;
   flex-direction: column;
-  width: 190px;
+  /* --card-width drives both the card's size and (via the em-based font
+     sizes below) its text — a card rendered smaller shrinks its text
+     proportionally instead of overflowing a box that got smaller than
+     the text expected. Defaults to the readable/"Normal" size; variants
+     that render at a different fixed size (the lane token, the hand fan)
+     reassign this one variable rather than repeating the whole formula. */
+  --card-width: var(--readable-card-width, 250px);
+  width: var(--card-width);
+  font-size: calc(var(--card-width) * 0.0579);
   aspect-ratio: 5 / 7;
   border-radius: 10px;
   border: 3px solid var(--card-border);
@@ -387,7 +431,12 @@ button {
 }
 
 .card--lane {
-  width: 88px;
+  --card-width: 88px;
+  /* The token never shows type line or description (see CardFace's
+     showDetails), only its name — and at 88px wide the proportional
+     formula above would make that unreadably small, so the name stays a
+     fixed legible size instead of scaling down with the token. */
+  font-size: 11px;
   transition: box-shadow 0.16s ease;
 }
 
@@ -416,7 +465,7 @@ button {
 
 .card__name {
   font-weight: 700;
-  font-size: 11px;
+  font-size: 1em;
   line-height: 1.3;
   color: var(--card-name-ink);
   white-space: nowrap;
@@ -452,7 +501,7 @@ button {
   padding: 2px 8px;
   margin-top: 4px;
   background: var(--card-name-bg);
-  font-size: 9px;
+  font-size: 0.818em;
   line-height: 1.3;
   font-weight: 600;
   color: var(--card-name-ink);
@@ -481,7 +530,7 @@ button {
 
 .card__description {
   margin: 0;
-  font-size: 10px;
+  font-size: 0.909em;
   font-weight: 600;
   line-height: 1.4;
   color: var(--card-text-ink);
@@ -495,7 +544,7 @@ button {
   border-radius: 999px;
   background: var(--accent);
   color: #1a0b2e;
-  font-size: 10px;
+  font-size: 0.909em;
   line-height: 1.3;
   font-weight: 700;
   opacity: 0;
@@ -580,6 +629,12 @@ button {
   opacity: 0.5;
 }
 
+.hand-tray .side-piles {
+  position: absolute;
+  left: 24px;
+  bottom: 14px;
+}
+
 .hand-fan {
   display: flex;
   align-items: flex-end;
@@ -590,7 +645,7 @@ button {
 }
 
 .hand-fan__slot {
-  margin: 0 -30px;
+  margin: 0 var(--hand-overlap, -30px);
   transform-origin: bottom center;
   position: relative;
 }
@@ -600,12 +655,17 @@ button {
 }
 
 .card--hand {
-  transform: rotate(var(--rotate)) translateY(calc(var(--drop) + 172px));
-  transition: transform 0.16s ease, box-shadow 0.16s ease;
+  /* Its own fixed size (see handTuning.tsx) — not a fraction of the
+     readable size above. Reassigning --card-width here is what makes its
+     text (the em-based font-sizes on .card__name etc.) shrink to match,
+     instead of the fixed-size text overflowing a smaller box. */
+  --card-width: var(--hand-card-width, 148px);
+  transform: rotate(var(--rotate)) translateY(calc(var(--drop) + var(--hand-peek, 172px)));
+  transition: transform 0.16s ease, box-shadow 0.16s ease, width 0.1s ease;
 }
 
 .hand-fan__slot:hover .card--hand {
-  transform: translateY(calc(var(--drop) - 72px)) scale(1.18) rotate(0deg);
+  transform: translateY(calc(var(--drop) - 72px)) scale(var(--hand-hover-scale, 1)) rotate(0deg);
   box-shadow: 0 16px 30px rgba(0, 0, 0, 0.5);
 }
 
@@ -723,6 +783,10 @@ button {
 }
 
 .card--mulligan {
+  /* Its own fixed "normal" size — independent of readableCardWidth, which
+     grew to 250px specifically for the zoomed/detail read, not for a
+     whole hand of cards laid out at once like this overlay. */
+  --card-width: 190px;
   transform: rotate(var(--rotate)) translateY(var(--drop));
   transition: transform 0.16s ease, box-shadow 0.16s ease;
 }
@@ -1044,4 +1108,118 @@ button {
     opacity: 0;
     transform: scale(1.05);
   }
+}
+
+/* ---------- Hand fan tuning panel (dev tool) ---------- */
+
+.hand-tuning__toggle {
+  /* A normal flex item alongside Menu/Log in .corner--top-right — only the
+     expanded panel below needs to break out of that row as a dropdown. */
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  border: 1px solid var(--panel-border);
+  background: var(--panel);
+  color: var(--text);
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.hand-tuning__toggle:hover {
+  border-color: var(--accent);
+}
+
+.hand-tuning {
+  position: absolute;
+  top: 50px;
+  right: 12px;
+  z-index: 40;
+  width: 240px;
+  padding: 10px 12px 12px;
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+  box-shadow: 0 12px 24px rgba(0, 0, 0, 0.5);
+  font-size: 12px;
+}
+
+.hand-tuning__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-weight: 600;
+  color: var(--text-h);
+  margin-bottom: 8px;
+}
+
+.hand-tuning__close {
+  background: none;
+  border: none;
+  color: var(--text);
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+  padding: 0 2px;
+}
+
+.hand-tuning__row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: 8px;
+}
+
+.hand-tuning__row span {
+  display: flex;
+  justify-content: space-between;
+  opacity: 0.85;
+}
+
+.hand-tuning__row em {
+  font-style: normal;
+  font-family: var(--mono);
+  color: var(--accent);
+}
+
+.hand-tuning__row input[type="range"] {
+  width: 100%;
+}
+
+.hand-tuning__actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.hand-tuning__actions button {
+  flex: 1;
+  padding: 5px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--panel-border);
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  font-size: 11px;
+}
+
+.hand-tuning__actions button:hover {
+  border-color: var(--accent);
+}
+
+.hand-tuning__readout {
+  margin: 8px 0 0;
+  padding: 6px;
+  background: rgba(0, 0, 0, 0.25);
+  border-radius: 6px;
+  font-size: 10px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  color: var(--text);
+  opacity: 0.8;
+}
+
+.hand-tuning__hint {
+  margin-top: 4px;
+  font-size: 10px;
+  opacity: 0.5;
 }
