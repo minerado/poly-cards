@@ -6,7 +6,6 @@ import { setupGame } from "../game/setup";
 import type { CardInstance } from "../game/types";
 import { CardView } from "./CardView";
 import { DrawAnimation } from "./DrawAnimation";
-import { OpponentBoard } from "./OpponentBoard";
 import { PhaseNarrator } from "./PhaseNarrator";
 import { PileView } from "./PileView";
 import { FoodBadge, LaborBadge } from "./ResourceBadges";
@@ -25,6 +24,7 @@ export function GameBoard({ onExitToMenu }: GameBoardProps) {
   const [drawingCard, setDrawingCard] = useState<CardInstance | null>(null);
   const { player, opponent, phase, turn, pendingSacrifices, log, gameOver } = state;
   const topGraveyardCard = player.graveyard[player.graveyard.length - 1];
+  const topOpponentGraveyardCard = opponent.graveyard[opponent.graveyard.length - 1];
 
   // Set right before dispatching a Draw-phase ADVANCE; consumed by the
   // layout effect below the moment the resulting `player.hand` lands, so
@@ -76,6 +76,15 @@ export function GameBoard({ onExitToMenu }: GameBoardProps) {
     <HandTuningProvider>
       <div className="board">
         <div className="corner corner--top-left">
+          <div className="resource-chip">
+            <FoodBadge /> {opponent.resources.Food}
+          </div>
+          <div className="resource-chip">
+            <LaborBadge /> {opponent.resources.Labor}
+          </div>
+        </div>
+
+        <div className="corner corner--top-center">
           <span className="turn-pill">
             Turn {turn} · <strong className="hud__phase">{phase.toUpperCase()}</strong>
           </span>
@@ -135,58 +144,85 @@ export function GameBoard({ onExitToMenu }: GameBoardProps) {
           </div>
         )}
 
-        <OpponentBoard opponent={opponent} />
+        {/* The opponent's zone: same building blocks as the player's below,
+            mirrored — hand-tray pins to the zone's top edge (column-reverse),
+            piles move to the right, and the fan/playfield alignment mirror
+            via their own --reversed modifiers. Opponent doesn't take real
+            turns yet (see GameState.opponent), so nothing here is
+            clickable — it only ever renders whatever state hands it. */}
+        <div className="zone zone--reversed">
+          <div className="playfield playfield--reversed">
+            <div className="lane">
+              {opponent.lane.map((card) => (
+                <CardView key={card.instanceId} card={card} variant="lane" />
+              ))}
+            </div>
+          </div>
 
-        <div className="board-seam" />
-
-        <div className="playfield">
-          <div className="lane">
-            {player.lane.map((card) => {
-              const inUpkeep = phase === "upkeep" && pendingSacrifices > 0;
-              const canTap = phase === "main" && !card.tapped;
-              const onClick = inUpkeep
-                ? () => dispatch({ type: "SACRIFICE_WORKER", instanceId: card.instanceId })
-                : canTap
-                ? () => dispatch({ type: "TAP_WORKER", instanceId: card.instanceId })
-                : undefined;
-
-              return (
-                <CardView
-                  key={card.instanceId}
-                  card={card}
-                  variant="lane"
-                  onClick={onClick}
-                  highlight={inUpkeep}
-                  actionLabel={inUpkeep ? "Sacrifice" : canTap ? "Tap" : undefined}
-                />
-              );
-            })}
+          <div className="hand-tray hand-tray--reversed">
+            <div className="hand-tray__label">Opponent</div>
+            <div className="side-piles">
+              <PileView
+                kind="graveyard"
+                count={opponent.graveyard.length}
+                topLabel={topOpponentGraveyardCard && definitionOf(topOpponentGraveyardCard).name}
+              />
+              <PileView kind="deck" count={opponent.deck.length} />
+            </div>
+            <HandFan cards={opponent.hand} faceDown reversed />
           </div>
         </div>
 
-        <div className="hand-tray">
-          <div className="hand-tray__label">You</div>
-          <div className="side-piles">
-            <PileView
-              kind="graveyard"
-              count={player.graveyard.length}
-              topLabel={topGraveyardCard && definitionOf(topGraveyardCard).name}
-            />
-            <PileView kind="deck" count={player.deck.length} />
+        <div className="board-seam" />
+
+        <div className="zone">
+          <div className="playfield">
+            <div className="lane">
+              {player.lane.map((card) => {
+                const inUpkeep = phase === "upkeep" && pendingSacrifices > 0;
+                const canTap = phase === "main" && !card.tapped;
+                const onClick = inUpkeep
+                  ? () => dispatch({ type: "SACRIFICE_WORKER", instanceId: card.instanceId })
+                  : canTap
+                  ? () => dispatch({ type: "TAP_WORKER", instanceId: card.instanceId })
+                  : undefined;
+
+                return (
+                  <CardView
+                    key={card.instanceId}
+                    card={card}
+                    variant="lane"
+                    onClick={onClick}
+                    highlight={inUpkeep}
+                  />
+                );
+              })}
+            </div>
           </div>
-          <HandFan
-            cards={
-              drawingCard
-                ? player.hand.filter((c) => c.instanceId !== drawingCard.instanceId)
-                : player.hand
-            }
-            actionLabel="Place"
-            onCardClick={
-              phase === "main" && !player.hasPlacedWorkerThisTurn
-                ? (instanceId) => dispatch({ type: "PLACE_WORKER", instanceId })
-                : undefined
-            }
-          />
+
+          <div className="hand-tray">
+            <div className="hand-tray__label">You</div>
+            <div className="side-piles">
+              <PileView
+                kind="graveyard"
+                count={player.graveyard.length}
+                topLabel={topGraveyardCard && definitionOf(topGraveyardCard).name}
+              />
+              <PileView kind="deck" count={player.deck.length} />
+            </div>
+            <HandFan
+              cards={
+                drawingCard
+                  ? player.hand.filter((c) => c.instanceId !== drawingCard.instanceId)
+                  : player.hand
+              }
+              onCardClick={
+                phase === "main" && !player.hasPlacedWorkerThisTurn
+                  ? (instanceId) => dispatch({ type: "PLACE_WORKER", instanceId })
+                  : undefined
+              }
+            />
+          </div>
         </div>
 
         {drawingCard && (
