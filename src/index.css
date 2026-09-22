@@ -308,6 +308,14 @@ button {
   justify-content: flex-end;
 }
 
+/* While dragging a hand card over the player's lane — a soft glow, not a
+   hard-edged border, so it stays consistent with the lane zone's own
+   borderless look. */
+.lane__tokens--drop-active .lane__zone {
+  background: rgba(143, 164, 201, 0.22);
+  box-shadow: 0 0 0 8px rgba(143, 164, 201, 0.1);
+}
+
 /* A soft, borderless dark zone marking where workers sit — present even
    when the lane is empty (as a single ghost slot, see .lane__ghost), so
    it reads as a real place on the board instead of blank wood. Tinted
@@ -343,6 +351,44 @@ button {
   border-radius: 10px;
   opacity: 0.6;
   flex: none;
+}
+
+/* Wraps each lane token (and the drag-time ghost slot below) so
+   GameBoard.tsx's FLIP effect has a plain element to measure and slide —
+   no styling of its own, sized to its content like the token it holds. */
+.lane__slot {
+  display: flex;
+}
+
+/* Where a dragged card would land if dropped right now (see
+   GameBoard.tsx's dropIndex/laneItems) — same dashed-outline language as
+   the empty-lane placeholder above, except this one can appear mid-lane
+   and grows in from nothing instead of always being there. */
+.card--ghost-slot {
+  width: 0;
+  aspect-ratio: 5 / 7;
+  border: 2px dashed rgba(255, 255, 255, 0.32);
+  border-radius: 10px;
+  opacity: 0.6;
+  flex: none;
+  overflow: hidden;
+  animation: ghost-slot-grow 0.16s ease forwards;
+}
+
+@keyframes ghost-slot-grow {
+  to {
+    width: var(--token-width, 88px);
+  }
+}
+
+/* The lane was already empty (already showing .lane__ghost at full size)
+   before this drag started — this slot is replacing that, not appearing
+   where there was nothing, so it should just already be full-size instead
+   of growing in from 0 (which read as the existing ghost shrinking away
+   and a new one popping in). */
+.card--ghost-slot--static {
+  width: var(--token-width, 88px);
+  animation: none;
 }
 
 /* Points in the direction the lane fills — toward the graveyard for the
@@ -509,6 +555,13 @@ button {
 
 .card--actionable {
   cursor: pointer;
+}
+
+/* Every hand card is draggable any time (see HandFan/HandFanCard), not
+   just ones currently playable — :not(.card--back) excludes the
+   opponent's face-down hand, which never drags. */
+.card--hand:not(.card--back) {
+  cursor: grab;
 }
 
 .card--lane {
@@ -714,6 +767,10 @@ button {
   margin: 0 var(--hand-overlap, -30px);
   transform-origin: bottom center;
   position: relative;
+  /* Smooths the dim-while-dragging/undim-on-release (see HandFanCard) —
+     without this a card that gets dropped somewhere invalid just snaps
+     back to full opacity instead of settling in. */
+  transition: opacity 0.15s ease;
 }
 
 .hand-fan--reversed .hand-fan__slot {
@@ -738,7 +795,13 @@ button {
   transition: transform 0.16s ease, box-shadow 0.16s ease, width 0.1s ease;
 }
 
-.hand-fan__slot:hover .card--hand {
+/* :not(:active) so pressing the card (about to click or drag it) drops
+   straight back to the plain resting transform instead of the enlarged
+   hover one — dnd-kit measures this element's rect the moment a drag
+   starts, and a still-animating (or even fully applied) 1.7×-ish hover
+   scale/translate right under the pointer throws that measurement off,
+   silently breaking drop-target collision for the rest of the drag. */
+.hand-fan__slot:hover:not(:active) .card--hand {
   transform: translateY(calc(var(--drop) - 72px)) scale(var(--hand-hover-scale, 1)) rotate(0deg);
   box-shadow: 0 16px 30px rgba(0, 0, 0, 0.5);
 }

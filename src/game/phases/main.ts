@@ -27,10 +27,22 @@ export const mainPhase: PhaseDef = {
         const card = state.player.hand.find((c) => c.instanceId === action.instanceId);
         if (!card) return undefined;
 
+        // Default rule: always the back of the line (see Rules/Deployment
+        // Placement.md). A modifier can override that and let the caller
+        // choose the index instead (see Rules/Placement Modifiers.md) — the
+        // index is only honored when that modifier is active, so a stray
+        // index on an action can't bypass the rule while it's off.
+        const lane = [...state.player.lane];
+        const insertAt =
+          state.modifiers.freeWorkerPlacement && action.index !== undefined
+            ? Math.max(0, Math.min(action.index, lane.length))
+            : lane.length;
+        lane.splice(insertAt, 0, card);
+
         const player: PlayerState = {
           ...state.player,
           hand: state.player.hand.filter((c) => c.instanceId !== action.instanceId),
-          lane: [...state.player.lane, card],
+          lane,
           hasPlacedWorkerThisTurn: true,
         };
         return withLog({ ...state, player }, `Placed ${definitionOf(card).name} into the lane.`);

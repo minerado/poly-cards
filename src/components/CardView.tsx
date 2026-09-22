@@ -1,4 +1,5 @@
-import type { CSSProperties } from "react";
+import { forwardRef } from "react";
+import type { ButtonHTMLAttributes, CSSProperties } from "react";
 import { definitionOf, typeLineOf } from "../game/components/queries";
 import type { CardDefinition } from "../game/components/types";
 import type { CardInstance } from "../game/types";
@@ -44,6 +45,20 @@ interface CardViewProps {
   highlight?: boolean;
   /** Renders the card back instead of its face — never actionable regardless of `onClick`. */
   faceDown?: boolean;
+  /** Extra props (drag listeners/aria attributes) spread onto the card's
+   *  own button — see HandFan's HandFanCard. These need to land on the
+   *  button specifically, not a wrapper: it's the element the fan's own
+   *  rotate/translateY transform is applied to, so it's the only one
+   *  whose rect actually matches where the card is visually drawn. A
+   *  drag library tracking an untransformed ancestor instead ends up
+   *  measuring a box nowhere near the card's real position. */
+  buttonProps?: ButtonHTMLAttributes<HTMLButtonElement>;
+  /** Skips the lane token's hover-preview sibling even though `variant`
+   *  is "lane" — for one-off token-styled renders (the drag overlay)
+   *  that aren't an actual field token, where the preview would be not
+   *  just pointless but actively wrong: it shows on CSS :hover, and a
+   *  drag overlay tracks the cursor everywhere it goes. */
+  noPreview?: boolean;
 }
 
 /**
@@ -92,7 +107,10 @@ function CardFace({ def, showDetails }: { def: CardDefinition; showDetails: bool
   );
 }
 
-export function CardView({ card, variant, onClick, highlight, faceDown }: CardViewProps) {
+export const CardView = forwardRef<HTMLButtonElement, CardViewProps>(function CardView(
+  { card, variant, onClick, highlight, faceDown, buttonProps, noPreview },
+  ref,
+) {
   const classes = [
     "card",
     `card--${variant}`,
@@ -104,7 +122,7 @@ export function CardView({ card, variant, onClick, highlight, faceDown }: CardVi
     .join(" ");
 
   if (faceDown) {
-    return <button type="button" className={`${classes} card--back`} disabled />;
+    return <button ref={ref} type="button" className={`${classes} card--back`} disabled />;
   }
 
   const def = definitionOf(card);
@@ -114,12 +132,20 @@ export function CardView({ card, variant, onClick, highlight, faceDown }: CardVi
     : undefined;
 
   const cardButton = (
-    <button type="button" className={classes} onClick={onClick} disabled={!onClick} style={style}>
+    <button
+      ref={ref}
+      type="button"
+      className={classes}
+      onClick={onClick}
+      disabled={!onClick}
+      style={style}
+      {...buttonProps}
+    >
       <CardFace def={def} showDetails={!isToken} />
     </button>
   );
 
-  if (!isToken) return cardButton;
+  if (!isToken || noPreview) return cardButton;
 
   // .card itself clips to its rounded corners (overflow: hidden), so the
   // Normal preview lives in a sibling instead of a child — otherwise it'd be
@@ -132,4 +158,4 @@ export function CardView({ card, variant, onClick, highlight, faceDown }: CardVi
       </div>
     </div>
   );
-}
+});

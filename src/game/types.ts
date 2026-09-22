@@ -42,9 +42,21 @@ export interface PlayerState {
   hasPlacedWorkerThisTurn: boolean;
 }
 
+/**
+ * Rule-level toggles a future card/ability can flip on, rather than special-
+ * casing its effect into the reducer per card. See design/Rules/Placement
+ * Modifiers.md in the Obsidian vault for the game-design side of this.
+ */
+export interface GameModifiers {
+  /** Lets the player choose the lane index when placing a worker, instead
+   *  of it always going to the back (see PLACE_WORKER's `index`). */
+  freeWorkerPlacement: boolean;
+}
+
 export interface GameState {
   turn: number;
   phase: Phase;
+  modifiers: GameModifiers;
   player: PlayerState;
   /**
    * The opponent's board, mirrored on the other side of the table — a real,
@@ -69,7 +81,7 @@ export interface GameState {
 export type Action =
   | { type: "CONFIRM_MULLIGAN" }
   | { type: "FINISH_MULLIGAN" }
-  | { type: "PLACE_WORKER"; instanceId: string }
+  | { type: "PLACE_WORKER"; instanceId: string; index?: number }
   | { type: "TAP_WORKER"; instanceId: string }
   | { type: "SACRIFICE_WORKER"; instanceId: string }
   | { type: "ADVANCE" }

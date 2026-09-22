@@ -28,6 +28,10 @@ export function setupGame(): GameState {
   return {
     turn: 1,
     phase: "mulligan",
+    // freeWorkerPlacement is on unconditionally for now — no card grants it
+    // yet (see Rules/Placement Modifiers.md), this is just switching it on
+    // directly in game state to build and observe the drag-to-position UI.
+    modifiers: { freeWorkerPlacement: true },
     player,
     opponent,
     pendingSacrifices: 0,
