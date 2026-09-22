@@ -1,5 +1,6 @@
 import { Hammer, Wheat } from "lucide-react";
 import { RoundBadge } from "./RoundBadge";
+import type { ResourceType } from "../game/types";
 
 /**
  * Resource glyphs — one per ResourceType, styled like Magic's mana symbols:
@@ -22,4 +23,10 @@ export function LaborBadge() {
       <Hammer size="0.65em" strokeWidth={3.5} aria-hidden="true" />
     </RoundBadge>
   );
+}
+
+/** Picks the right badge for a ResourceType — for spots (like a token's
+ *  resource strip) that only know the resource, not which specific glyph. */
+export function ResourceBadge({ resource }: { resource: ResourceType }) {
+  return resource === "Food" ? <FoodBadge /> : <LaborBadge />;
 }

@@ -2,10 +2,10 @@ import { createContext, useContext, useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 
 /**
- * Live-tunable hand-fan knobs, for the on-screen dev panel (HandTuningPanel)
- * — every value here has a default that matches what the fan looked like
- * before this existed, so the panel is purely additive: leave it alone and
- * nothing changes.
+ * Live-tunable game-config knobs (cards, hand fan, wood board), for the
+ * on-screen dev panel (HandTuningPanel) — every value here has a default
+ * that matches what the game looked like before this existed, so the panel
+ * is purely additive: leave it alone and nothing changes.
  */
 export interface HandTuning {
   /** The card's real, readable size, px wide — every "Normal" card in the
@@ -26,6 +26,29 @@ export interface HandTuning {
   overlap: number;
   /** Vertical px the whole fan sits below the tray's top edge (how much "peeks" up). */
   peek: number;
+  /** The lane token's width, px — also what the deck/graveyard piles
+   *  match themselves to, and what the lane indicator sizes itself
+   *  around (see laneZonePadding). */
+  tokenWidth: number;
+
+  /** Wood board's left/right margin from the screen edge, px (smaller = wider board). */
+  boardMarginX: number;
+  /** Wood board's top/bottom margin from the screen edge, px — independent
+   *  of the hand-trays, so 0 lets it fill the full screen height (cards
+   *  then sit visibly on top of it, wherever it reaches). */
+  boardMarginY: number;
+  /** Blur radius of the board's outer drop shadow, px (bigger = softer/more depth). */
+  boardShadowBlur: number;
+  /** Opacity (0–1) of both the outer drop shadow and the inset edge shadow. */
+  boardShadowOpacity: number;
+  /** Extra px inserted at the seam between the two players' main lanes —
+   *  the board itself doesn't grow, the two lanes just sit further apart
+   *  within it. */
+  playerDistance: number;
+  /** Padding (px, all sides) between the lane indicator's edge and the
+   *  tokens/ghost it wraps — the indicator's own size is never set
+   *  directly, it's always token size + this padding. */
+  laneZonePadding: number;
 }
 
 export const DEFAULT_HAND_TUNING: HandTuning = {
@@ -34,8 +57,15 @@ export const DEFAULT_HAND_TUNING: HandTuning = {
   maxRotation: 9,
   rotationStep: 2,
   riseFactor: 2,
-  overlap: -36,
+  overlap: -30,
   peek: 122,
+  tokenWidth: 90,
+  boardMarginX: 40,
+  boardMarginY: 40,
+  boardShadowBlur: 14,
+  boardShadowOpacity: 0.45,
+  playerDistance: 44,
+  laneZonePadding: 8,
 };
 
 const STORAGE_KEY = "poly-cards:hand-tuning";
@@ -71,15 +101,35 @@ export function HandTuningProvider({ children }: { children: ReactNode }) {
     }
   }, [tuning]);
 
-  // Published globally (not just to HandFan) since readableCardWidth is the
-  // "Normal" card size used everywhere — mulligan, the lane hover preview,
-  // a hovered hand card — not just the fan's own layout.
+  // Published globally (not just to HandFan) since readableCardWidth and
+  // tokenWidth are the "Normal"/token card sizes used everywhere — mulligan,
+  // the lane hover preview, a hovered hand card, lane tokens, and the
+  // deck/graveyard piles (which match tokenWidth) — not just the fan.
   useEffect(() => {
-    document.documentElement.style.setProperty(
-      "--readable-card-width",
-      `${tuning.readableCardWidth}px`,
-    );
-  }, [tuning.readableCardWidth]);
+    const root = document.documentElement.style;
+    root.setProperty("--readable-card-width", `${tuning.readableCardWidth}px`);
+    root.setProperty("--token-width", `${tuning.tokenWidth}px`);
+  }, [tuning.readableCardWidth, tuning.tokenWidth]);
+
+  // Same global-publish approach for the wood board (.wood-board reads these
+  // directly) — it's a plain CSS element, not a component with its own
+  // props, so there's no other tidy place to hand it live values.
+  useEffect(() => {
+    const root = document.documentElement.style;
+    root.setProperty("--board-margin-x", `${tuning.boardMarginX}px`);
+    root.setProperty("--board-margin-y", `${tuning.boardMarginY}px`);
+    root.setProperty("--board-shadow-blur", `${tuning.boardShadowBlur}px`);
+    root.setProperty("--board-shadow-opacity", `${tuning.boardShadowOpacity}`);
+    root.setProperty("--player-distance", `${tuning.playerDistance}px`);
+    root.setProperty("--lane-zone-padding", `${tuning.laneZonePadding}px`);
+  }, [
+    tuning.boardMarginX,
+    tuning.boardMarginY,
+    tuning.boardShadowBlur,
+    tuning.boardShadowOpacity,
+    tuning.playerDistance,
+    tuning.laneZonePadding,
+  ]);
 
   const value = useMemo<HandTuningContextValue>(
     () => ({

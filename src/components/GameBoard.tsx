@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useReducer, useRef, useState } from "react";
-import { Menu, ScrollText } from "lucide-react";
+import { ArrowLeft, ArrowRight, Menu, ScrollText } from "lucide-react";
 import { definitionOf } from "../game/components/queries";
 import { findPhaseDef, gameReducer, phaseCtx } from "../game/phases";
 import { setupGame } from "../game/setup";
@@ -144,72 +144,100 @@ export function GameBoard({ onExitToMenu }: GameBoardProps) {
           </div>
         )}
 
+        {/* A wooden game-board surface sitting in the screen's center, behind
+            the lanes but above the painted vista — see .wood-board for how
+            it's sized to exactly fill the gap between the two
+            fixed-height hand-trays regardless of viewport height. */}
+        <div className="wood-board" />
+
         {/* The opponent's zone: same building blocks as the player's below,
-            mirrored — hand-tray pins to the zone's top edge (column-reverse),
-            piles move to the right, and the fan/playfield alignment mirror
-            via their own --reversed modifiers. Opponent doesn't take real
-            turns yet (see GameState.opponent), so nothing here is
-            clickable — it only ever renders whatever state hands it. */}
+            mirrored — hand-tray pins to the zone's top edge (column-reverse)
+            and the playfield's own two rows mirror via --reversed
+            (column-reverse again, so lane-row--main still ends up nearest
+            the seam on both sides — see .playfield--reversed). Opponent
+            doesn't take real turns yet (see GameState.opponent), so
+            nothing here is clickable — it only ever renders whatever
+            state hands it. */}
         <div className="zone zone--reversed">
           <div className="playfield playfield--reversed">
-            <div className="lane">
-              {opponent.lane.map((card) => (
-                <CardView key={card.instanceId} card={card} variant="lane" />
-              ))}
-            </div>
-          </div>
-
-          <div className="hand-tray hand-tray--reversed">
-            <div className="hand-tray__label">Opponent</div>
-            <div className="side-piles">
+            <div className="lane-row lane-row--main">
               <PileView
                 kind="graveyard"
                 count={opponent.graveyard.length}
                 topLabel={topOpponentGraveyardCard && definitionOf(topOpponentGraveyardCard).name}
               />
+              <div className="lane__tokens lane__tokens--reversed">
+                <div className="lane__zone lane__zone--reversed">
+                  {opponent.lane.length > 0 ? (
+                    opponent.lane.map((card) => (
+                      <CardView key={card.instanceId} card={card} variant="lane" />
+                    ))
+                  ) : (
+                    <div className="lane__ghost" />
+                  )}
+                  <ArrowLeft className="lane__arrow" size={18} />
+                </div>
+              </div>
               <PileView kind="deck" count={opponent.deck.length} />
             </div>
+            {/* Reserved for future zones (a dedicated special-card slot,
+                other playable cards) — deliberately empty for now. */}
+            <div className="lane-row" />
+          </div>
+
+          <div className="hand-tray hand-tray--reversed">
             <HandFan cards={opponent.hand} faceDown reversed />
           </div>
         </div>
 
-        <div className="board-seam" />
+        {/* Live-tunable gap between the two zones — see .zone-gap and the
+            "Distance between players" slider in the Wood board config. */}
+        <div className="zone-gap" />
 
         <div className="zone">
           <div className="playfield">
-            <div className="lane">
-              {player.lane.map((card) => {
-                const inUpkeep = phase === "upkeep" && pendingSacrifices > 0;
-                const canTap = phase === "main" && !card.tapped;
-                const onClick = inUpkeep
-                  ? () => dispatch({ type: "SACRIFICE_WORKER", instanceId: card.instanceId })
-                  : canTap
-                  ? () => dispatch({ type: "TAP_WORKER", instanceId: card.instanceId })
-                  : undefined;
+            <div className="lane-row lane-row--main">
+              <PileView kind="deck" count={player.deck.length} />
+              <div className="lane__tokens">
+                <div className="lane__zone">
+                  {player.lane.length > 0 ? (
+                    player.lane.map((card) => {
+                      const inUpkeep = phase === "upkeep" && pendingSacrifices > 0;
+                      const canTap = phase === "main" && !card.tapped;
+                      const onClick = inUpkeep
+                        ? () => dispatch({ type: "SACRIFICE_WORKER", instanceId: card.instanceId })
+                        : canTap
+                        ? () => dispatch({ type: "TAP_WORKER", instanceId: card.instanceId })
+                        : undefined;
 
-                return (
-                  <CardView
-                    key={card.instanceId}
-                    card={card}
-                    variant="lane"
-                    onClick={onClick}
-                    highlight={inUpkeep}
-                  />
-                );
-              })}
-            </div>
-          </div>
-
-          <div className="hand-tray">
-            <div className="hand-tray__label">You</div>
-            <div className="side-piles">
+                      return (
+                        <CardView
+                          key={card.instanceId}
+                          card={card}
+                          variant="lane"
+                          onClick={onClick}
+                          highlight={inUpkeep}
+                        />
+                      );
+                    })
+                  ) : (
+                    <div className="lane__ghost" />
+                  )}
+                  <ArrowRight className="lane__arrow" size={18} />
+                </div>
+              </div>
               <PileView
                 kind="graveyard"
                 count={player.graveyard.length}
                 topLabel={topGraveyardCard && definitionOf(topGraveyardCard).name}
               />
-              <PileView kind="deck" count={player.deck.length} />
             </div>
+            {/* Reserved for future zones (a dedicated special-card slot,
+                other playable cards) — deliberately empty for now. */}
+            <div className="lane-row" />
+          </div>
+
+          <div className="hand-tray">
             <HandFan
               cards={
                 drawingCard
