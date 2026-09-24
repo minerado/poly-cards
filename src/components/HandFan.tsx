@@ -102,11 +102,14 @@ export function HandFan({ cards, onCardClick, faceDown, reversed }: HandFanProps
             style={style}
             faceDown={faceDown}
             onClick={onClick}
-            // Draggable any time, independent of whether a click would
+            // Draggable any time, independent of whether a drop would
             // currently do anything (e.g. wrong phase, already placed a
-            // worker this turn) — dropping it somewhere that isn't a
-            // valid placement just doesn't place it (see GameBoard's
-            // handleDragEnd), same as any other invalid click already did.
+            // worker/drafted this turn) — dropping it somewhere invalid
+            // just doesn't do anything (see GameBoard's handleDragEnd),
+            // same as any other invalid click already did. Every card is
+            // dragged one way or another — a Worker into the lane, a
+            // Draft card onto a target already in it (see GameBoard's
+            // handleDragStart) — so there's no card type this excludes.
             draggable={!faceDown}
           />
         );

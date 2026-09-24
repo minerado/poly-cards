@@ -1,5 +1,5 @@
 import { definitionOf } from "../components/queries";
-import { withLog } from "../helpers";
+import { activePlayerState, withActivePlayerState, withLog } from "../helpers";
 import type { PlayerState } from "../types";
 import type { PhaseDef } from "./types";
 
@@ -11,19 +11,21 @@ export const upkeepPhase: PhaseDef = {
   // is paid, at which point this phase moves on by itself.
   reduce(state, action, ctx) {
     if (action.type !== "SACRIFICE_WORKER" || state.pendingSacrifices <= 0) return undefined;
-    const card = state.player.lane.find((c) => c.instanceId === action.instanceId);
+    // Interactive-only, same as PLACE_WORKER/TAP_WORKER — there's no AI
+    // sacrifice decision built yet (Upkeep is still disabled in the real
+    // turn loop, see phases/index.ts), so this stays player-only for now.
+    if (state.activeSide !== "player") return undefined;
+
+    const active = activePlayerState(state);
+    const card = active.lane.find((c) => c.instanceId === action.instanceId);
     if (!card) return undefined;
 
-    const lane = state.player.lane.filter((c) => c.instanceId !== action.instanceId);
+    const lane = active.lane.filter((c) => c.instanceId !== action.instanceId);
     const pendingSacrifices = state.pendingSacrifices - 1;
-    const player: PlayerState = {
-      ...state.player,
-      lane,
-      graveyard: [...state.player.graveyard, card],
-    };
+    const updated: PlayerState = { ...active, lane, graveyard: [...active.graveyard, card] };
 
     let next = withLog(
-      { ...state, player, pendingSacrifices },
+      { ...withActivePlayerState(state, updated), pendingSacrifices },
       `Sacrificed ${definitionOf(card).name}.`
     );
 

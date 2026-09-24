@@ -1,6 +1,6 @@
 import type { CardInstance } from "../types";
 import { CARD_REGISTRY } from "./registry";
-import type { CardDefinition, ResourceGenerator } from "./types";
+import type { CardDefinition, Cost, ResourceGenerator } from "./types";
 
 export function definitionOf(card: CardInstance): CardDefinition {
   return CARD_REGISTRY[card.defId];
@@ -22,4 +22,16 @@ export function typeLineOf(def: CardDefinition): string | undefined {
   return types.specific.length > 0
     ? `${types.general} — ${types.specific.join(", ")}`
     : types.general;
+}
+
+/** Does this card perform the Draft ability when played (see Rules/Draft
+ *  Ability.md)? A Worker can't draft itself — only a card with this
+ *  component, played from hand at a target, can. */
+export function hasDraftAbility(card: CardInstance): boolean {
+  return !!definitionOf(card).components.draftAbility;
+}
+
+/** What this card costs to play from hand, if anything. */
+export function costOf(card: CardInstance): Cost | undefined {
+  return definitionOf(card).components.cost;
 }

@@ -29,4 +29,17 @@ export const CARD_REGISTRY: Record<string, CardDefinition> = {
       cardTypes: { general: "Worker", specific: ["Builder"] },
     },
   },
+  draft: {
+    id: "draft",
+    name: "Draft",
+    // No dedicated art yet — reusing the card back as a placeholder face
+    // until this gets real illustration.
+    image: "/cards/card-back.png",
+    description: "Cost: 1 [labor-badge]\nFlip a target untapped Worker into Warfare.",
+    components: {
+      cardTypes: { general: "Action", specific: [] },
+      draftAbility: true,
+      cost: { resource: "Labor", amount: 1 },
+    },
+  },
 };

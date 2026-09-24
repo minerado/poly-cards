@@ -26,10 +26,24 @@ export interface CardTypes {
   specific: string[]; // e.g. ["Farmer"] — an array since specific types can stack
 }
 
+export interface Cost {
+  resource: ResourceType;
+  amount: number;
+}
+
 export interface ComponentBag {
   resourceGenerator?: ResourceGenerator;
   workerTier?: WorkerTier;
   cardTypes?: CardTypes;
+  /** Marks a card as the Draft ability itself (see Rules/Draft Ability.md):
+   *  a Worker can't draft itself — this is what actually performs the
+   *  draft, targeting a separate untapped Worker when played from hand. */
+  draftAbility?: true;
+  /** What it costs to play this card from hand — checked and paid from
+   *  the acting side's resources at the moment the card's effect
+   *  resolves (see Rules/Draft Ability.md). Generic, not Draft-specific:
+   *  any future card played from hand can carry this same component. */
+  cost?: Cost;
   // Add new components here as new mechanics are designed. Each addition
   // is a new optional field — existing components and the cards that use
   // them never need to change.

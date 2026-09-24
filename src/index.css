@@ -355,9 +355,12 @@ button {
 
 /* Wraps each lane token (and the drag-time ghost slot below) so
    GameBoard.tsx's FLIP effect has a plain element to measure and slide —
-   no styling of its own, sized to its content like the token it holds. */
+   sized to its content like the token it holds. Relatively positioned in
+   case a future overlay (e.g. a dying-in-combat treatment) needs to pin
+   to a specific corner of it. */
 .lane__slot {
   display: flex;
+  position: relative;
 }
 
 /* Where a dragged card would land if dropped right now (see
@@ -398,6 +401,83 @@ button {
   flex: none;
   color: var(--text);
   opacity: 0.45;
+}
+
+/* Replaces .lane__arrow during the Warfare phase (see GameBoard.tsx) —
+   the player's own copy is a real button (click to attack), the
+   opponent's (.lane__sword--inert) just mirrors the same states so its
+   turn reads as happening, not frozen. */
+.lane__sword {
+  all: unset;
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.lane__sword--inert {
+  cursor: default;
+}
+
+/* Idle and clickable: a slow pulse inviting the click — not shown once
+   swinging (below), or on the opponent's inert copy, which never invites
+   anything. */
+.lane__sword:not(:disabled):not(.lane__sword--inert) {
+  animation: sword-idle-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes sword-idle-pulse {
+  0%,
+  100% {
+    opacity: 0.5;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.12);
+  }
+}
+
+/* The strike itself — a quick committed swing, not a idle wobble. */
+.lane__sword--swinging {
+  animation: sword-swing 0.38s cubic-bezier(0.3, 0.1, 0.2, 1) both;
+}
+
+@keyframes sword-swing {
+  0% {
+    transform: rotate(0deg) scale(1);
+  }
+  35% {
+    transform: rotate(-32deg) scale(1.05);
+  }
+  70% {
+    transform: rotate(18deg) scale(1.15);
+  }
+  100% {
+    transform: rotate(0deg) scale(1);
+  }
+}
+
+/* A card destroyed in the fight that just resolved — still rendered
+   (from a pre-combat snapshot, see GameBoard.tsx's AttackState) just long
+   enough to visibly fall, instead of vanishing the instant the reducer
+   removes it. */
+.lane__slot--dying {
+  animation: lane-card-dying 0.32s ease-in forwards;
+  pointer-events: none;
+}
+
+@keyframes lane-card-dying {
+  from {
+    opacity: 1;
+    transform: none;
+  }
+  to {
+    opacity: 0;
+    transform: scale(0.55) rotate(18deg);
+  }
 }
 
 .phase-btn {
@@ -521,6 +601,11 @@ button {
 .round-badge--labor {
   background: #93a3b3;
   color: #20262c;
+}
+
+.round-badge--warfare {
+  background: #b23b3b;
+  color: #2a0a0a;
 }
 
 /* ---------- Cards ----------
@@ -681,6 +766,7 @@ button {
   font-weight: 600;
   line-height: 1.4;
   color: var(--card-text-ink);
+  white-space: pre-line;
 }
 
 .card--lane.card--actionable:hover {
@@ -726,6 +812,34 @@ button {
 
 .card--highlight {
   box-shadow: 0 0 0 2px var(--danger);
+}
+
+/* Drafted into Warfare (see Rules/Draft Ability.md) — just a border/glow
+   tint, not opacity or transform, so it layers cleanly with .card--tapped
+   (a just-drafted card is always both at once) instead of fighting it. */
+.card--drafted {
+  border-color: #b23b3b;
+  box-shadow: 0 0 0 1px rgba(178, 59, 59, 0.55);
+}
+
+/* A valid target while a Draft card (or some future targeted ability) is
+   armed — a gold glow, distinct from .card--highlight's red "danger"
+   meaning (Upkeep sacrifice) so the two are never confusable. */
+.card--targetable {
+  box-shadow: 0 0 0 2px var(--accent), 0 0 14px rgba(217, 176, 84, 0.6);
+}
+
+/* Positions the Warfare badge over a drafted card's bare back art (see
+   CardView.tsx) — that button has no namebar/artbox structure to hang a
+   normal .card__resourcebar off, so this pins it near the bottom instead. */
+.card__resourcebar--back {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 6px;
+  margin: 0;
+  border-top: none;
+  font-size: 1.5em;
 }
 
 /* ---------- Hand ---------- */
@@ -804,6 +918,134 @@ button {
 .hand-fan__slot:hover:not(:active) .card--hand {
   transform: translateY(calc(var(--drop) - 72px)) scale(var(--hand-hover-scale, 1)) rotate(0deg);
   box-shadow: 0 16px 30px rgba(0, 0, 0, 0.5);
+}
+
+/* ---------- Coin toss overlay ---------- */
+
+.coin-toss-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(10, 10, 14, 0.82);
+  backdrop-filter: blur(2px);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 36px;
+  z-index: 95;
+}
+
+.coin {
+  width: 120px;
+  height: 120px;
+  position: relative;
+  transform-style: preserve-3d;
+}
+
+/* Spin and hop as separate transform properties (not one combined
+   `transform`, and not one keyframe set), so they can run on their own
+   independent curves — a linear spin the whole way through, and an
+   ease-out hop that peaks mid-flight. Coupling them into a single
+   `transform: rotateY(...) translateY(...)` with one shared keyframe
+   made the spin's own midpoint angle land exactly on a face for some
+   outcomes (a multiple of 180deg), which looked like it paused flat
+   instead of tumbling through it. */
+.coin--flipping {
+  animation:
+    coin-spin 1.4s linear forwards,
+    coin-hop 1.4s ease-out forwards;
+}
+
+/* Once settled, held at its landed rotation via inline custom property
+   rather than the animation's own fill state — keeps the final frame
+   stable if this component ever re-renders. */
+.coin--settled {
+  rotate: y var(--coin-final-deg);
+}
+
+@keyframes coin-spin {
+  from {
+    rotate: y 0deg;
+  }
+  to {
+    rotate: y var(--coin-final-deg);
+  }
+}
+
+@keyframes coin-hop {
+  0%,
+  100% {
+    translate: 0 0;
+  }
+  50% {
+    translate: 0 -36px;
+  }
+}
+
+.coin__face {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  backface-visibility: hidden;
+  font-weight: 800;
+  font-size: 18px;
+  letter-spacing: 0.04em;
+  color: #1a0b2e;
+  background: linear-gradient(160deg, #ffe9a8, var(--accent) 65%, #b98a3a);
+  border: 3px solid rgba(255, 255, 255, 0.35);
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.45);
+}
+
+.coin__face--opponent {
+  transform: rotateY(180deg);
+}
+
+.coin-toss-overlay__footer {
+  position: relative;
+  height: 84px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.coin-toss-overlay__reveal {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  opacity: 1;
+  transition: opacity 0.3s ease;
+}
+
+.coin-toss-overlay__reveal--hidden {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.coin-toss-overlay__message {
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--text-h);
+  letter-spacing: 0.01em;
+}
+
+.coin-toss-overlay__confirm {
+  padding: 12px 22px;
+  border-radius: 10px;
+  border: none;
+  background: var(--accent);
+  color: #1a0b2e;
+  font-weight: 700;
+  font-size: 14px;
+  cursor: pointer;
+  box-shadow: 0 6px 16px rgba(143, 164, 201, 0.35);
+}
+
+.coin-toss-overlay__confirm:hover {
+  filter: brightness(1.08);
 }
 
 /* ---------- Mulligan overlay ---------- */

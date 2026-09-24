@@ -9,6 +9,12 @@ export interface CardInstance {
   instanceId: string;
   defId: string;
   tapped: boolean;
+  /** Flipped into Warfare via the DRAFT action (see Rules/Draft Ability.md)
+   *  — stops generating resources (Rules/Drafting Population Risk.md) and
+   *  starts counting toward combat instead, if it's part of the front line
+   *  (Rules/Front-Line Warfare.md). Still counts as population either way
+   *  — drafting alone never reduces it. */
+  drafted: boolean;
 }
 
 /**
@@ -26,12 +32,18 @@ export interface CardInstance {
  * choices) and folded into the End -> Draw transition rather than being
  * its own UI phase.
  *
- * "mulligan" is a pregame phase, not part of the turn cycle: it happens
- * before turn 1's Draw phase, and never recurs once the player is
- * satisfied and moves on. The player may repeat it (discard the whole
- * hand, redraw one fewer card each time) until only 1 card is left.
+ * "coinToss" and "mulligan" are pregame phases, not part of the turn
+ * cycle: coinToss reveals who goes first (already decided at setupGame,
+ * see firstSide below — this phase is just the on-screen reveal of it),
+ * then hands off to mulligan, which happens before turn 1's Draw phase
+ * and never recurs once the player is satisfied and moves on. The player
+ * may repeat mulligan (discard the whole hand, redraw one fewer card each
+ * time) until only 1 card is left.
  */
-export type Phase = "mulligan" | "draw" | "main" | "upkeep" | "warfare" | "end";
+export type Phase = "coinToss" | "mulligan" | "draw" | "main" | "upkeep" | "warfare" | "end";
+
+/** Whose turn it is. Turns alternate — see phases/end.ts. */
+export type Side = "player" | "opponent";
 
 export interface PlayerState {
   deck: CardInstance[];
@@ -40,6 +52,10 @@ export interface PlayerState {
   graveyard: CardInstance[];
   resources: Record<ResourceType, number>;
   hasPlacedWorkerThisTurn: boolean;
+  /** One DRAFT per turn, same budget shape as hasPlacedWorkerThisTurn —
+   *  see Rules/Draft Ability.md's open question about frequency; this is
+   *  the default chosen until a card says otherwise. */
+  hasDraftedThisTurn: boolean;
 }
 
 /**
@@ -56,14 +72,24 @@ export interface GameModifiers {
 export interface GameState {
   turn: number;
   phase: Phase;
+  /** Whose turn is currently resolving — see game/helpers.ts's
+   *  activePlayerState/withActivePlayerState, which every phase uses
+   *  instead of hardcoding `player`. */
+  activeSide: Side;
+  /** Decided once by a coin toss at game start (see setupGame) and never
+   *  changes afterward — End phase (phases/end.ts) compares it against
+   *  activeSide to know whether both sides have gone this round yet. */
+  firstSide: Side;
   modifiers: GameModifiers;
   player: PlayerState;
   /**
-   * The opponent's board, mirrored on the other side of the table — a real,
-   * independently-dealt PlayerState (their own deck, their own starting
-   * hand), not placeholder data. Purely inert display data for now: no
-   * reducer/phase logic reads or writes it after setup, since they don't
-   * take real turns yet. See game/setup.ts.
+   * The opponent's board, mirrored on the other side of the table — a
+   * real, independently-dealt PlayerState (their own deck, their own
+   * starting hand), not placeholder data. Takes real, full turns just
+   * like the player (see game/ai.ts for its Main-phase decisions, and
+   * activeSide above for how turns alternate) — mulligan is the one
+   * exception, staying player-only since it's a pregame step, not part
+   * of the turn loop.
    */
   opponent: PlayerState;
   /** Food deficit still needing sacrifices this upkeep, if any. */
@@ -79,10 +105,17 @@ export interface GameState {
  * other actions are genuine player choices distinct from "move on".
  */
 export type Action =
+  | { type: "CONFIRM_COIN_TOSS" }
   | { type: "CONFIRM_MULLIGAN" }
   | { type: "FINISH_MULLIGAN" }
   | { type: "PLACE_WORKER"; instanceId: string; index?: number }
   | { type: "TAP_WORKER"; instanceId: string }
+  /** Plays a hand card with the Draft ability (see Rules/Draft
+   *  Ability.md) at a target: `cardInstanceId` is the Draft card itself
+   *  (consumed), `targetInstanceId` is the untapped Worker it flips into
+   *  Warfare. A Worker never drafts itself. */
+  | { type: "DRAFT"; cardInstanceId: string; targetInstanceId: string }
   | { type: "SACRIFICE_WORKER"; instanceId: string }
+  | { type: "RESOLVE_WARFARE" }
   | { type: "ADVANCE" }
   | { type: "RESTART" };

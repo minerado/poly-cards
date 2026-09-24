@@ -1,4 +1,4 @@
-import { Hammer, Wheat } from "lucide-react";
+import { Hammer, Swords, Wheat } from "lucide-react";
 import { RoundBadge } from "./RoundBadge";
 import type { ResourceType } from "../game/types";
 
@@ -29,4 +29,14 @@ export function LaborBadge() {
  *  resource strip) that only know the resource, not which specific glyph. */
 export function ResourceBadge({ resource }: { resource: ResourceType }) {
   return resource === "Food" ? <FoodBadge /> : <LaborBadge />;
+}
+
+/** Marks a drafted (Warfare) card's token — stands in for the resource
+ *  badge it no longer earns (see Rules/Drafting Population Risk.md). */
+export function WarfareBadge() {
+  return (
+    <RoundBadge className="round-badge--warfare">
+      <Swords size="0.65em" strokeWidth={3.5} aria-hidden="true" />
+    </RoundBadge>
+  );
 }

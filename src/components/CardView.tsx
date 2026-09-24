@@ -4,7 +4,7 @@ import { definitionOf, typeLineOf } from "../game/components/queries";
 import type { CardDefinition } from "../game/components/types";
 import type { CardInstance } from "../game/types";
 import { withBadges } from "./cardMarkup";
-import { ResourceBadge } from "./ResourceBadges";
+import { ResourceBadge, WarfareBadge } from "./ResourceBadges";
 
 const LANE_JITTER_MAX_DEG = 5;
 
@@ -43,6 +43,10 @@ interface CardViewProps {
   variant: "hand" | "lane" | "mulligan";
   onClick?: () => void;
   highlight?: boolean;
+  /** A valid target while some other card is armed for a targeted ability
+   *  (e.g. a Draft card in hand waiting for a Worker to flip) — its own
+   *  glow, distinct from `highlight`'s (danger/Upkeep) meaning. */
+  targetable?: boolean;
   /** Renders the card back instead of its face — never actionable regardless of `onClick`. */
   faceDown?: boolean;
   /** Extra props (drag listeners/aria attributes) spread onto the card's
@@ -108,15 +112,17 @@ function CardFace({ def, showDetails }: { def: CardDefinition; showDetails: bool
 }
 
 export const CardView = forwardRef<HTMLButtonElement, CardViewProps>(function CardView(
-  { card, variant, onClick, highlight, faceDown, buttonProps, noPreview },
+  { card, variant, onClick, highlight, targetable, faceDown, buttonProps, noPreview },
   ref,
 ) {
   const classes = [
     "card",
     `card--${variant}`,
     card.tapped ? "card--tapped" : "",
+    card.drafted ? "card--drafted" : "",
     !faceDown && onClick ? "card--actionable" : "",
     highlight ? "card--highlight" : "",
+    targetable ? "card--targetable" : "",
   ]
     .filter(Boolean)
     .join(" ");
@@ -125,12 +131,36 @@ export const CardView = forwardRef<HTMLButtonElement, CardViewProps>(function Ca
     return <button ref={ref} type="button" className={`${classes} card--back`} disabled />;
   }
 
-  const def = definitionOf(card);
   const isToken = variant === "lane";
   const style = isToken
     ? ({ "--jitter": `${laneJitterDeg(card.instanceId)}deg` } as CSSProperties)
     : undefined;
 
+  // Drafted (flipped into Warfare — see Rules/Draft Ability.md): shows the
+  // same back art as a genuinely hidden card, not its face. The specific
+  // Worker it used to be stops mattering once it's Warfare, so there's
+  // nothing left to reveal — just a Warfare marker standing in for the
+  // whole face. Stays interactive (unlike the opponent's truly face-down
+  // hand above): the button keeps its normal onClick/disabled behavior.
+  if (isToken && card.drafted) {
+    return (
+      <button
+        ref={ref}
+        type="button"
+        className={`${classes} card--back`}
+        onClick={onClick}
+        disabled={!onClick}
+        style={style}
+        {...buttonProps}
+      >
+        <div className="card__resourcebar card__resourcebar--back">
+          <WarfareBadge />
+        </div>
+      </button>
+    );
+  }
+
+  const def = definitionOf(card);
   const cardButton = (
     <button
       ref={ref}

@@ -3,9 +3,10 @@ import type { CSSProperties } from "react";
 import { DndContext, PointerSensor, useSensor, useSensors } from "@dnd-kit/core";
 import type { DragCancelEvent, DragEndEvent, DragMoveEvent, DragStartEvent } from "@dnd-kit/core";
 import { getEventCoordinates } from "@dnd-kit/utilities";
-import { ArrowLeft, ArrowRight, Menu, ScrollText } from "lucide-react";
-import { definitionOf } from "../game/components/queries";
+import { ArrowLeft, ArrowRight, Menu, ScrollText, Swords } from "lucide-react";
+import { costOf, definitionOf, hasDraftAbility } from "../game/components/queries";
 import { findPhaseDef, gameReducer, phaseCtx } from "../game/phases";
+import { frontLine } from "../game/phases/warfare";
 import { setupGame } from "../game/setup";
 import type { CardInstance } from "../game/types";
 import { CardView } from "./CardView";
@@ -14,6 +15,7 @@ import { PhaseNarrator } from "./PhaseNarrator";
 import { PileView } from "./PileView";
 import { FoodBadge, LaborBadge } from "./ResourceBadges";
 import { HandFan } from "./HandFan";
+import { CoinTossOverlay } from "./CoinTossOverlay";
 import { MulliganOverlay } from "./MulliganOverlay";
 import { HandTuningProvider } from "../dev/handTuning";
 import { HandTuningPanel } from "../dev/HandTuningPanel";
@@ -40,19 +42,24 @@ function pointInRect(
  *  the card was always still in the hand, so "returning" it is just not
  *  moving it, the same as any other invalid click already did.
  *
- *  `dropIndex` is a separate field from `overLane`, not derived from it:
- *  it's only meaningful while the freeWorkerPlacement modifier is on (see
- *  PLACE_WORKER), so it can be null while overLane is true (modifier off,
- *  or off the edge of any measured card) without that meaning "not over
- *  the lane" — the lane highlight and the ghost slot are genuinely two
- *  different questions that happen to update together. */
+ *  Two different things can be dragged, and they don't share a shape:
+ *  a Worker is dropped *into the lane* (kind "place" — dropIndex is only
+ *  meaningful while the freeWorkerPlacement modifier is on, see
+ *  PLACE_WORKER, so it can be null while overLane is true without that
+ *  meaning "not over the lane"), but a Draft card is dropped *onto a
+ *  specific existing card* (kind "draft" — targetId is that card's id,
+ *  or null while hovering anywhere that isn't a valid target). Which one
+ *  applies is decided once, at "start", from the dragged card itself —
+ *  see handleDragStart. */
 type DragState =
   | { status: "idle" }
-  | { status: "dragging"; cardId: string; overLane: boolean; dropIndex: number | null };
+  | { status: "dragging"; cardId: string; kind: "place"; overLane: boolean; dropIndex: number | null }
+  | { status: "dragging"; cardId: string; kind: "draft"; targetId: string | null };
 
 type DragAction =
-  | { type: "start"; cardId: string }
-  | { type: "move"; overLane: boolean; dropIndex: number | null }
+  | { type: "start"; cardId: string; kind: "place" | "draft" }
+  | { type: "movePlace"; overLane: boolean; dropIndex: number | null }
+  | { type: "moveDraft"; targetId: string | null }
   | { type: "end" };
 
 const IDLE_DRAG_STATE: DragState = { status: "idle" };
@@ -60,17 +67,40 @@ const IDLE_DRAG_STATE: DragState = { status: "idle" };
 function dragStateReducer(state: DragState, action: DragAction): DragState {
   switch (action.type) {
     case "start":
-      return { status: "dragging", cardId: action.cardId, overLane: false, dropIndex: null };
-    case "move":
-      // No-op from "idle" — a stray move event can't un-idle a drag that
-      // never started.
-      return state.status === "dragging"
+      return action.kind === "place"
+        ? { status: "dragging", cardId: action.cardId, kind: "place", overLane: false, dropIndex: null }
+        : { status: "dragging", cardId: action.cardId, kind: "draft", targetId: null };
+    case "movePlace":
+      // No-op unless a "place" drag is actually in progress — a stray
+      // move event can't un-idle a drag that never started, and can't
+      // apply "place" fields to a "draft" drag either.
+      return state.status === "dragging" && state.kind === "place"
         ? { ...state, overLane: action.overLane, dropIndex: action.dropIndex }
+        : state;
+    case "moveDraft":
+      return state.status === "dragging" && state.kind === "draft"
+        ? { ...state, targetId: action.targetId }
         : state;
     case "end":
       return IDLE_DRAG_STATE;
   }
 }
+
+/** Every state the Warfare-phase sword can be in. "idle" is ready and
+ *  (for the player) clickable; "swinging" plays the strike itself, purely
+ *  visual, before anything is dispatched; "dying" holds a snapshot of
+ *  both lanes from just before RESOLVE_WARFARE landed, so the cards it
+ *  destroyed can still be rendered fading out even though the real state
+ *  has already moved on without them — see the effects below for how
+ *  each transition fires. */
+type AttackState =
+  | { status: "idle" }
+  | { status: "swinging" }
+  | { status: "dying"; beforePlayer: CardInstance[]; beforeOpponent: CardInstance[] };
+
+const IDLE_ATTACK_STATE: AttackState = { status: "idle" };
+const SWING_MS = 380;
+const DYING_MS = 340;
 
 interface GameBoardProps {
   onExitToMenu: () => void;
@@ -81,16 +111,24 @@ export function GameBoard({ onExitToMenu }: GameBoardProps) {
   const [logOpen, setLogOpen] = useState(false);
   const [drawingCard, setDrawingCard] = useState<CardInstance | null>(null);
   const [dragState, dispatchDrag] = useReducer(dragStateReducer, IDLE_DRAG_STATE);
-  const { player, opponent, phase, turn, pendingSacrifices, log, gameOver } = state;
+  const [attackState, setAttackState] = useState<AttackState>(IDLE_ATTACK_STATE);
+  const { player, opponent, phase, turn, activeSide, pendingSacrifices, log, gameOver } = state;
   const topGraveyardCard = player.graveyard[player.graveyard.length - 1];
   const topOpponentGraveyardCard = opponent.graveyard[opponent.graveyard.length - 1];
-  const canPlaceWorker = phase === "main" && !player.hasPlacedWorkerThisTurn;
+  const canPlaceWorker = phase === "main" && activeSide === "player" && !player.hasPlacedWorkerThisTurn;
   const draggingCard =
     dragState.status === "dragging"
       ? player.hand.find((c) => c.instanceId === dragState.cardId)
       : undefined;
-  const isOverLane = dragState.status === "dragging" && dragState.overLane;
-  const dropIndex = dragState.status === "dragging" ? dragState.dropIndex : null;
+  const isOverLane = dragState.status === "dragging" && dragState.kind === "place" && dragState.overLane;
+  const dropIndex =
+    dragState.status === "dragging" && dragState.kind === "place" ? dragState.dropIndex : null;
+  // The lane card currently under the pointer while dragging a Draft card
+  // — the one about to be drafted if dropped right now (see Rules/Draft
+  // Ability.md). Highlighted the same way a drop-index ghost is: only the
+  // thing directly under the cursor, not every eligible card at once.
+  const draftDragTargetId =
+    dragState.status === "dragging" && dragState.kind === "draft" ? dragState.targetId : null;
   // The visible lane box (the dark rounded zone, sized to its actual
   // content) — deliberately not .lane__tokens, the big invisible flex
   // container it sits in: that spans most of the row's width, so testing
@@ -126,6 +164,14 @@ export function GameBoard({ onExitToMenu }: GameBoardProps) {
 
   function handlePlaceWorker(instanceId: string) {
     dispatch({ type: "PLACE_WORKER", instanceId });
+  }
+
+  // A Draft card has no click behavior of its own — it's played by
+  // dragging it onto a target (see Rules/Draft Ability.md and
+  // handleDragStart/computeDraftTarget below), the same way a Worker is
+  // played by dragging it into the lane rather than clicking it.
+  function handleHandCardClick(instanceId: string) {
+    if (canPlaceWorker) handlePlaceWorker(instanceId);
   }
 
   // dnd-kit's own droppable/collision system (useDroppable + event.over)
@@ -176,6 +222,23 @@ export function GameBoard({ onExitToMenu }: GameBoardProps) {
     return computeDropIndex(pointer.x);
   }
 
+  // Which lane card (if any) a Draft card would be played on if dropped
+  // right now: point-in-rect against each individually-tracked lane card
+  // (see laneCardRefs), same rect source computeDropIndex uses, just a
+  // direct hit test instead of a "which gap" walk — a Draft card targets
+  // one specific existing card, not a position between cards. Only
+  // untapped, undrafted Workers are eligible; PLACE_WORKER-style gating
+  // (phase/side/once-per-turn) is the caller's job, not this function's.
+  function computeDraftTarget(pointer: { x: number; y: number } | null): string | null {
+    if (!pointer) return null;
+    for (const card of player.lane) {
+      if (card.tapped || card.drafted) continue;
+      const el = laneCardRefs.current.get(card.instanceId);
+      if (el && pointInRect(pointer, el.getBoundingClientRect())) return card.instanceId;
+    }
+    return null;
+  }
+
   // Current pointer position = where the drag started (a plain read of
   // the native event's own clientX/Y, not a measurement) plus dnd-kit's
   // own running total of pointer movement since then. See cursorPos's
@@ -188,30 +251,69 @@ export function GameBoard({ onExitToMenu }: GameBoardProps) {
   }
 
   function handleDragStart(event: DragStartEvent) {
-    dispatchDrag({ type: "start", cardId: String(event.active.id) });
+    const cardId = String(event.active.id);
+    const card = player.hand.find((c) => c.instanceId === cardId);
+    // Which of the two drag flows this is (see DragState's own comment) —
+    // decided once, up front, from the card itself: a Draft card is
+    // dropped on a target, everything else is dropped into the lane.
+    const kind = card && hasDraftAbility(card) ? "draft" : "place";
+    dispatchDrag({ type: "start", cardId, kind });
     const start = getEventCoordinates(event.activatorEvent);
     if (start) setCursorPos(start);
   }
 
+  // Draft-target gating lives here, alongside canPlaceWorker just above —
+  // both are "would this drop actually do anything right now", not just
+  // "is the pointer somewhere relevant": once-per-turn, right phase, right
+  // side. A hover that couldn't complete shouldn't light anything up,
+  // same reasoning as canPlaceWorker's own comment below.
+  const canDraft = phase === "main" && activeSide === "player" && !player.hasDraftedThisTurn;
+
+  // The dragged Draft card's own cost also has to actually be affordable
+  // right now — same "would this drop actually do anything" reasoning as
+  // canDraft above, just keyed on the specific card instead of turn state.
+  function canAffordDraftCard(cardId: string): boolean {
+    const card = player.hand.find((c) => c.instanceId === cardId);
+    const cost = card && costOf(card);
+    return !cost || player.resources[cost.resource] >= cost.amount;
+  }
+
   function handleDragMove(event: DragMoveEvent) {
+    const pointer = pointerPositionFor(event);
+    setCursorPos(pointer);
+
+    if (dragState.status === "dragging" && dragState.kind === "draft") {
+      const canDropHere = canDraft && canAffordDraftCard(dragState.cardId);
+      dispatchDrag({ type: "moveDraft", targetId: canDropHere ? computeDraftTarget(pointer) : null });
+      return;
+    }
     // Gated on canPlaceWorker too, not just the rect overlap: a card can be
     // dragged any time (see HandFan), but if this drop couldn't actually
     // place it (wrong phase, already placed one this turn), the lane
     // shouldn't light up or offer a slot for it — that visual feedback is
     // a promise the drop can keep, not just "you're near the lane".
     const overLane = canPlaceWorker && isOverLaneRect(event);
-    const pointer = pointerPositionFor(event);
-    dispatchDrag({ type: "move", overLane, dropIndex: dropIndexFor(overLane, pointer) });
-    setCursorPos(pointer);
+    dispatchDrag({ type: "movePlace", overLane, dropIndex: dropIndexFor(overLane, pointer) });
   }
 
   function handleDragEnd(event: DragEndEvent) {
     // Read where it landed before "end" wipes the drag state, not after —
     // once it's "idle" there's no longer a dragged card to have an
-    // opinion about. Dropped anywhere but the lane (including nowhere at
-    // all) is simply not a placement, the same as an invalid click was
+    // opinion about. Dropped anywhere invalid (including nowhere at all)
+    // is simply not a placement/draft, the same as an invalid click was
     // already a no-op: the card never left the hand, so there's nothing
     // to undo.
+    if (dragState.status === "dragging" && dragState.kind === "draft") {
+      const canDropHere = canDraft && canAffordDraftCard(dragState.cardId);
+      const targetId = canDropHere ? computeDraftTarget(pointerPositionFor(event)) : null;
+      dispatchDrag({ type: "end" });
+      setCursorPos(null);
+      if (targetId) {
+        dispatch({ type: "DRAFT", cardInstanceId: String(event.active.id), targetInstanceId: targetId });
+      }
+      return;
+    }
+
     const droppedOnLane = canPlaceWorker && isOverLaneRect(event);
     const index = dropIndexFor(droppedOnLane, pointerPositionFor(event)) ?? undefined;
     dispatchDrag({ type: "end" });
@@ -247,6 +349,83 @@ export function GameBoard({ onExitToMenu }: GameBoardProps) {
     if (fresh) setDrawingCard(fresh);
   }, [player.hand]);
 
+  // Set right before dispatching RESOLVE_WARFARE; consumed by the layout
+  // effect below the moment its result lands, so the cards it destroyed
+  // can still be shown fading out (see AttackState's own comment) even
+  // though they're already gone from `player.lane`/`opponent.lane` by
+  // then. Same pendingDrawRef-style pattern as the Draw animation above.
+  const pendingCombatRef = useRef<{ player: CardInstance[]; opponent: CardInstance[] } | null>(null);
+
+  function handleAttackClick() {
+    if (!(phase === "warfare" && activeSide === "player" && attackState.status === "idle")) return;
+    if (frontLine(player.lane) === 0) return; // nothing to attack with — shouldn't even be clickable
+    setAttackState({ status: "swinging" });
+  }
+
+  // The swing itself is purely visual — nothing is dispatched until it's
+  // actually landed, so the player sees the strike before its result.
+  useEffect(() => {
+    if (attackState.status !== "swinging") return;
+    const t = setTimeout(() => {
+      pendingCombatRef.current = { player: player.lane, opponent: opponent.lane };
+      dispatch({ type: "RESOLVE_WARFARE" });
+    }, SWING_MS);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [attackState.status]);
+
+  // Fires once RESOLVE_WARFARE's result actually lands (guarded by the
+  // ref, so it ignores every other reason `log` can change — nearly every
+  // action logs something). Keyed on `log` rather than player.lane/
+  // opponent.lane: those don't get new references when the fight is a
+  // no-op (neither side has front-line Warfare, very likely turn 1), so
+  // watching them left this stuck in "warfare" forever whenever nothing
+  // died — `log` always changes, since RESOLVE_WARFARE always logs
+  // something even for "no conflict". Shows the "dying" stage for
+  // DYING_MS, then advances the phase for real — see warfare.ts's
+  // ADVANCE, split from RESOLVE_WARFARE specifically so this has time to
+  // play first.
+  useLayoutEffect(() => {
+    const before = pendingCombatRef.current;
+    if (!before) return;
+    pendingCombatRef.current = null;
+    setAttackState({ status: "dying", beforePlayer: before.player, beforeOpponent: before.opponent });
+    const t = setTimeout(() => {
+      dispatch({ type: "ADVANCE" });
+      setAttackState(IDLE_ATTACK_STATE);
+    }, DYING_MS);
+    return () => clearTimeout(t);
+  }, [log]);
+
+  // The opponent has no button to click — its own Warfare phase plays the
+  // identical swing/resolve/dying sequence automatically, after a brief
+  // pause so it reads as a deliberate beat rather than an instant cut.
+  // But only when it actually has something to attack with: RESOLVE_WARFARE
+  // compares both sides' *current* front lines regardless of who triggered
+  // it, so dispatching it with a 0 front line wouldn't be a no-op — the
+  // player's own leftover Warfare, if any, would still "win" and rout the
+  // opponent on a turn where the opponent never chose to fight at all.
+  // With nothing to attack with, this just skips straight to ADVANCE, the
+  // same as the player clicking "Next" to decline.
+  useEffect(() => {
+    if (phase !== "warfare" || activeSide !== "opponent" || attackState.status !== "idle") return;
+    if (frontLine(opponent.lane) === 0) {
+      const t = setTimeout(() => dispatch({ type: "ADVANCE" }), 500);
+      return () => clearTimeout(t);
+    }
+    const t = setTimeout(() => setAttackState({ status: "swinging" }), 500);
+    return () => clearTimeout(t);
+  }, [phase, activeSide, attackState.status, opponent.lane]);
+
+  // While a fight's result is still animating, the lane renders from this
+  // snapshot instead of the real (already-updated) state — see
+  // AttackState's own comment.
+  const displayPlayerLane = attackState.status === "dying" ? attackState.beforePlayer : player.lane;
+  const displayOpponentLane = attackState.status === "dying" ? attackState.beforeOpponent : opponent.lane;
+  function isDyingCard(card: CardInstance, realLane: CardInstance[]): boolean {
+    return attackState.status === "dying" && !realLane.some((c) => c.instanceId === card.instanceId);
+  }
+
   // The player's lane, with a ghost slot spliced in at dropIndex while a
   // free-placement drag hovers a specific gap — "id" doubles as each
   // .lane__slot wrapper's key and FLIP identity (see the effect below);
@@ -260,7 +439,7 @@ export function GameBoard({ onExitToMenu }: GameBoardProps) {
     });
     if (dropIndex >= player.lane.length) laneItems.push({ id: "ghost", kind: "ghost" });
   } else {
-    player.lane.forEach((card) => laneItems.push({ id: card.instanceId, kind: "card", card }));
+    displayPlayerLane.forEach((card) => laneItems.push({ id: card.instanceId, kind: "card", card }));
   }
 
   // FLIP (First-Last-Invert-Play): plain flexbox reflow when a ghost slot
@@ -320,7 +499,8 @@ export function GameBoard({ onExitToMenu }: GameBoardProps) {
   const [narrator, setNarrator] = useState<{ message: string; delayMs: number } | null>(null);
 
   useEffect(() => {
-    const def = findPhaseDef(phase)?.narrator;
+    const raw = findPhaseDef(phase)?.narrator;
+    const def = typeof raw === "function" ? raw(state, phaseCtx) : raw;
     if (!def) {
       setNarrator(null);
       return;
@@ -331,9 +511,12 @@ export function GameBoard({ onExitToMenu }: GameBoardProps) {
       if (def.autoAdvance) handleAdvance();
     }, def.delayMs);
     return () => clearTimeout(t);
-    // Intentionally re-runs only on phase change: nothing else can happen
-    // mid-narrator, since these phases render no interactive UI.
-  }, [phase]);
+    // activeSide is in the deps defensively, not because it's needed
+    // today: Main's narrator reads it (see main.ts, "Your Turn" vs
+    // "Opponent's Turn"), and right now activeSide only ever changes
+    // alongside phase anyway (see phases/end.ts) — but the two are
+    // logically independent, so this doesn't rely on that staying true.
+  }, [phase, activeSide]);
 
   return (
     <HandTuningProvider>
@@ -356,19 +539,32 @@ export function GameBoard({ onExitToMenu }: GameBoardProps) {
 
         <div className="corner corner--top-center">
           <span className="turn-pill">
-            Turn {turn} · <strong className="hud__phase">{phase.toUpperCase()}</strong>
+            Turn {turn} · <strong>{activeSide === "player" ? "You" : "Opponent"}</strong> ·{" "}
+            <strong className="hud__phase">{phase.toUpperCase()}</strong>
           </span>
           {(() => {
             // The button's destination label comes from the active phase's
             // own definition (game/phases/*.ts), never hardcoded here — a
-            // phase with no nextLabel (mulligan, upkeep) just renders no
-            // button, since it advances through its own UI instead.
-            const nextLabel = findPhaseDef(phase)?.nextLabel;
-            if (!nextLabel) return null;
+            // phase with no nextLabel (mulligan, upkeep) renders no button,
+            // and Main renders none on the opponent's own turn either (its
+            // nextLabel returns undefined then — see main.ts), since it
+            // advances by itself in both cases.
+            const nextLabelDef = findPhaseDef(phase)?.nextLabel;
             const label =
-              typeof nextLabel === "function" ? nextLabel(state, phaseCtx) : nextLabel;
+              typeof nextLabelDef === "function" ? nextLabelDef(state, phaseCtx) : nextLabelDef;
+            if (!label) return null;
             return (
-              <button className="phase-btn" onClick={handleAdvance}>
+              <button
+                className="phase-btn"
+                onClick={handleAdvance}
+                // Warfare's own Next (skip attacking) shares this same
+                // button with every other phase's — disabled while a
+                // sword-triggered attack is already resolving, so a click
+                // here can't dispatch a second ADVANCE mid-sequence and
+                // skip past a phase transition the animation is still
+                // about to make on its own (see the "dying" effect above).
+                disabled={phase === "warfare" && attackState.status !== "idle"}
+              >
                 Next <span>{label}</span>
               </button>
             );
@@ -438,14 +634,29 @@ export function GameBoard({ onExitToMenu }: GameBoardProps) {
               />
               <div className="lane__tokens lane__tokens--reversed">
                 <div className="lane__zone lane__zone--reversed">
-                  {opponent.lane.length > 0 ? (
-                    opponent.lane.map((card) => (
-                      <CardView key={card.instanceId} card={card} variant="lane" />
+                  {displayOpponentLane.length > 0 ? (
+                    displayOpponentLane.map((card) => (
+                      <div
+                        key={card.instanceId}
+                        className={`lane__slot ${isDyingCard(card, opponent.lane) ? "lane__slot--dying" : ""}`}
+                      >
+                        <CardView card={card} variant="lane" />
+                      </div>
                     ))
                   ) : (
                     <div className="lane__ghost" />
                   )}
-                  <ArrowLeft className="lane__arrow" size={18} />
+                  {phase === "warfare" && activeSide === "opponent" && frontLine(opponent.lane) > 0 ? (
+                    <div
+                      className={`lane__sword lane__sword--inert ${
+                        attackState.status === "swinging" ? "lane__sword--swinging" : ""
+                      }`}
+                    >
+                      <Swords size={18} />
+                    </div>
+                  ) : (
+                    <ArrowLeft className="lane__arrow" size={18} />
+                  )}
                 </div>
               </div>
               <PileView kind="deck" count={opponent.deck.length} />
@@ -490,29 +701,61 @@ export function GameBoard({ onExitToMenu }: GameBoardProps) {
                       }
 
                       const { card } = item;
-                      const inUpkeep = phase === "upkeep" && pendingSacrifices > 0;
-                      const canTap = phase === "main" && !card.tapped;
+                      const inUpkeep =
+                        phase === "upkeep" && activeSide === "player" && pendingSacrifices > 0;
+                      // Drafted cards don't tap for a resource anymore
+                      // (see Rules/Drafting Population Risk.md) — their
+                      // only turn action is the not-yet-built move (Rules/
+                      // Drafted Warfare Turn Action.md), so this card's own
+                      // click does nothing for them once drafted.
+                      const canTap =
+                        phase === "main" && activeSide === "player" && !card.tapped && !card.drafted;
                       const onClick = inUpkeep
                         ? () => dispatch({ type: "SACRIFICE_WORKER", instanceId: card.instanceId })
                         : canTap
                         ? () => dispatch({ type: "TAP_WORKER", instanceId: card.instanceId })
                         : undefined;
 
+                      const dying = isDyingCard(card, player.lane);
+
                       return (
                         <div
                           key={card.instanceId}
-                          className="lane__slot"
+                          className={`lane__slot ${dying ? "lane__slot--dying" : ""}`}
                           data-flip-id={card.instanceId}
                           ref={(el) => registerLaneCardRef(card.instanceId, el)}
                         >
-                          <CardView card={card} variant="lane" onClick={onClick} highlight={inUpkeep} />
+                          <CardView
+                            card={card}
+                            variant="lane"
+                            onClick={onClick}
+                            highlight={inUpkeep}
+                            // Glows while a Draft card is being dragged
+                            // directly over it (see draftDragTargetId) —
+                            // the one card that would actually be drafted
+                            // if dropped right now.
+                            targetable={draftDragTargetId === card.instanceId}
+                          />
                         </div>
                       );
                     })
                   ) : (
                     <div className="lane__ghost" />
                   )}
-                  <ArrowRight className="lane__arrow" size={18} />
+                  {phase === "warfare" && activeSide === "player" && frontLine(player.lane) > 0 ? (
+                    <button
+                      className={`lane__sword ${
+                        attackState.status === "swinging" ? "lane__sword--swinging" : ""
+                      }`}
+                      onClick={handleAttackClick}
+                      disabled={attackState.status !== "idle"}
+                      title="Attack"
+                    >
+                      <Swords size={18} />
+                    </button>
+                  ) : (
+                    <ArrowRight className="lane__arrow" size={18} />
+                  )}
                 </div>
               </div>
               <PileView
@@ -533,7 +776,12 @@ export function GameBoard({ onExitToMenu }: GameBoardProps) {
                   ? player.hand.filter((c) => c.instanceId !== drawingCard.instanceId)
                   : player.hand
               }
-              onCardClick={canPlaceWorker ? handlePlaceWorker : undefined}
+              // Always passed, same "attempt it, an invalid attempt is
+              // just a harmless no-op" philosophy as dragging any hand
+              // card any time (see HandFan's own draggable comment) —
+              // handleHandCardClick itself gates what actually happens
+              // per card type/phase.
+              onCardClick={handleHandCardClick}
             />
           </div>
         </div>
@@ -544,6 +792,13 @@ export function GameBoard({ onExitToMenu }: GameBoardProps) {
 
         {narrator && <PhaseNarrator message={narrator.message} durationMs={narrator.delayMs} />}
 
+        {phase === "coinToss" && (
+          <CoinTossOverlay
+            firstSide={state.firstSide}
+            onConfirm={() => dispatch({ type: "CONFIRM_COIN_TOSS" })}
+          />
+        )}
+
         {phase === "mulligan" && (
           <MulliganOverlay
             hand={player.hand}
@@ -552,20 +807,36 @@ export function GameBoard({ onExitToMenu }: GameBoardProps) {
           />
         )}
 
-        {gameOver && (
-          <div className="overlay">
-            <div className="overlay__card">
-              <h2>Game Over</h2>
-              <p>Your population collapsed to 0.</p>
-              <div className="overlay__actions">
-                <button onClick={() => dispatch({ type: "RESTART" })}>Restart</button>
-                <button className="overlay__secondary" onClick={onExitToMenu}>
-                  Main Menu
-                </button>
+        {gameOver &&
+          (() => {
+            // Population collapse used to only ever be the player's own
+            // doing (an Upkeep sacrifice emptying their own lane), so this
+            // text could stay static. Now Warfare can rout either side —
+            // see phases/warfare.ts — so it has to say who actually lost.
+            const playerLost = player.lane.length === 0;
+            const opponentLost = opponent.lane.length === 0;
+            const title = playerLost && opponentLost ? "Mutual Defeat" : playerLost ? "Defeat" : "Victory";
+            const message =
+              playerLost && opponentLost
+                ? "Both civilizations collapsed at once."
+                : playerLost
+                ? "Your population collapsed to 0."
+                : "The opponent's population collapsed to 0.";
+            return (
+              <div className="overlay">
+                <div className="overlay__card">
+                  <h2>{title}</h2>
+                  <p>{message}</p>
+                  <div className="overlay__actions">
+                    <button onClick={() => dispatch({ type: "RESTART" })}>Restart</button>
+                    <button className="overlay__secondary" onClick={onExitToMenu}>
+                      Main Menu
+                    </button>
+                  </div>
+                </div>
               </div>
-            </div>
-          </div>
-        )}
+            );
+          })()}
       </div>
 
       {/* The "flying" copy that actually follows the cursor while
