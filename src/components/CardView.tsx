@@ -1,10 +1,10 @@
 import { forwardRef } from "react";
 import type { ButtonHTMLAttributes, CSSProperties } from "react";
-import { definitionOf, typeLineOf } from "../game/components/queries";
-import type { CardDefinition } from "../game/components/types";
+import { definitionOf, resourceGeneratedBy, typeLineOf } from "../game/components/queries";
+import type { CardDefinition, ResourceGenerator } from "../game/components/types";
 import type { CardInstance } from "../game/types";
 import { withBadges } from "./cardMarkup";
-import { ResourceBadge, WarfareBadge } from "./ResourceBadges";
+import { ResourceBadge } from "./ResourceBadges";
 
 const LANE_JITTER_MAX_DEG = 5;
 
@@ -44,7 +44,7 @@ interface CardViewProps {
   onClick?: () => void;
   highlight?: boolean;
   /** A valid target while some other card is armed for a targeted ability
-   *  (e.g. a Draft card in hand waiting for a Worker to flip) — its own
+   *  (e.g. a Draft card in hand waiting for a Worker to target) — its own
    *  glow, distinct from `highlight`'s (danger/Upkeep) meaning. */
   targetable?: boolean;
   /** Renders the card back instead of its face — never actionable regardless of `onClick`. */
@@ -75,21 +75,53 @@ interface CardViewProps {
  *   Hovering a token shows the Normal card over it instead of zooming the
  *   token itself (too small to zoom legibly).
  */
-function CardFace({ def, showDetails }: { def: CardDefinition; showDetails: boolean }) {
+function CardFace({
+  def,
+  showDetails,
+  resourceGenerator,
+}: {
+  def: CardDefinition;
+  showDetails: boolean;
+  /** The token's resource badge — the *effective* amount for this specific
+   *  instance (see components/queries.ts's resourceGeneratedBy), not just
+   *  def's printed one: an attachment's resourceGeneratorPenalty (see
+   *  Rules/Draft Ability.md) can knock this down to nothing, and the token
+   *  needs to stop showing a badge for a resource the card can no longer
+   *  actually generate. Undefined = nothing to show, whether because the
+   *  card never generated anything or because an attachment zeroed it out. */
+  resourceGenerator?: ResourceGenerator;
+}) {
   const typeLine = showDetails ? typeLineOf(def) : undefined;
-  const resourceGenerator = !showDetails ? def.components.resourceGenerator : undefined;
+  const tokenResource = !showDetails ? resourceGenerator : undefined;
+  const cost = showDetails ? def.components.cost : undefined;
 
   return (
     <>
+      {/* Top-right corner, same spot MTG puts its mana cost — only on the
+          full "Normal" card (showDetails), never the token: the token has
+          no room for it, and no card with a cost is ever placed as a lane
+          token of its own anyway (an Order attaches instead — see
+          types.ts's CardInstance.attachments). One badge per point of
+          cost (repeated, not a badge+number) so it reads the same way a
+          repeated mana symbol does. */}
+      {cost && cost.length > 0 && (
+        <div className="card__cost">
+          {cost.flatMap((entry) =>
+            Array.from({ length: entry.amount }, (_, i) => (
+              <ResourceBadge key={`${entry.resource}-${i}`} resource={entry.resource} />
+            ))
+          )}
+        </div>
+      )}
       <div className="card__namebar">
         <span className="card__name">{def.name}</span>
       </div>
       <div className="card__artbox">
         <img className="card__image" src={def.image} alt={def.name} draggable={false} />
       </div>
-      {resourceGenerator && (
+      {tokenResource && (
         <div className="card__resourcebar">
-          <ResourceBadge resource={resourceGenerator.resource} />
+          <ResourceBadge resource={tokenResource.resource} />
         </div>
       )}
       {showDetails && (
@@ -115,11 +147,14 @@ export const CardView = forwardRef<HTMLButtonElement, CardViewProps>(function Ca
   { card, variant, onClick, highlight, targetable, faceDown, buttonProps, noPreview },
   ref,
 ) {
+  // A drafted card's own face/border never changes (see the attachment
+  // stack below, below this component) — the attached card peeking out
+  // behind it is the only visual signal, by design: the host's own detail
+  // stays exactly what it was.
   const classes = [
     "card",
     `card--${variant}`,
     card.tapped ? "card--tapped" : "",
-    card.drafted ? "card--drafted" : "",
     !faceDown && onClick ? "card--actionable" : "",
     highlight ? "card--highlight" : "",
     targetable ? "card--targetable" : "",
@@ -136,31 +171,8 @@ export const CardView = forwardRef<HTMLButtonElement, CardViewProps>(function Ca
     ? ({ "--jitter": `${laneJitterDeg(card.instanceId)}deg` } as CSSProperties)
     : undefined;
 
-  // Drafted (flipped into Warfare — see Rules/Draft Ability.md): shows the
-  // same back art as a genuinely hidden card, not its face. The specific
-  // Worker it used to be stops mattering once it's Warfare, so there's
-  // nothing left to reveal — just a Warfare marker standing in for the
-  // whole face. Stays interactive (unlike the opponent's truly face-down
-  // hand above): the button keeps its normal onClick/disabled behavior.
-  if (isToken && card.drafted) {
-    return (
-      <button
-        ref={ref}
-        type="button"
-        className={`${classes} card--back`}
-        onClick={onClick}
-        disabled={!onClick}
-        style={style}
-        {...buttonProps}
-      >
-        <div className="card__resourcebar card__resourcebar--back">
-          <WarfareBadge />
-        </div>
-      </button>
-    );
-  }
-
   const def = definitionOf(card);
+  const effectiveResourceGenerator = resourceGeneratedBy(card);
   const cardButton = (
     <button
       ref={ref}
@@ -171,7 +183,7 @@ export const CardView = forwardRef<HTMLButtonElement, CardViewProps>(function Ca
       style={style}
       {...buttonProps}
     >
-      <CardFace def={def} showDetails={!isToken} />
+      <CardFace def={def} showDetails={!isToken} resourceGenerator={effectiveResourceGenerator} />
     </button>
   );
 
@@ -182,9 +194,29 @@ export const CardView = forwardRef<HTMLButtonElement, CardViewProps>(function Ca
   // cut off the moment it grew past the tiny token's own bounds.
   return (
     <div className="card-slot">
+      {/* Each attachment (see types.ts's CardInstance.attachments — e.g. a
+          Draft Order) renders as a small plate peeking out from behind the
+          host card, stacked deepest-first so the most recent attachment
+          sits nearest the front. That peeking plate is the *only* visual
+          the host card itself gets — no badge, no border change to the
+          card's own face (the user doesn't want a drafted Worker's card
+          detail to look any different from an undrafted one, beyond
+          whatever an attachment's own effect already changes, like a
+          zeroed resource badge). Purely decorative (aria-hidden). */}
+      {card.attachments.length > 0 && (
+        <div className="card__attachments" aria-hidden="true">
+          {card.attachments.map((attachment, i) => (
+            <div
+              key={attachment.instanceId}
+              className="card__attachment"
+              style={{ "--stack-depth": card.attachments.length - i } as CSSProperties}
+            />
+          ))}
+        </div>
+      )}
       {cardButton}
       <div className="card card__preview">
-        <CardFace def={def} showDetails />
+        <CardFace def={def} showDetails resourceGenerator={effectiveResourceGenerator} />
       </div>
     </div>
   );

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { runOpponentMainPhase } from "../ai";
+import { runOpponentMainPhase, shouldOpponentAttack } from "../ai";
+import { hasWarfare } from "../components/queries";
 import { setupGame } from "../setup";
 import type { CardInstance, GameState, PlayerState } from "../types";
 import { drawPhase } from "./draw";
@@ -14,8 +15,21 @@ import { warfarePhase } from "./warfare";
 // the real TURN_PHASES the app ships with.
 const reducerWithUpkeep = createReducer([drawPhase, mainPhase, upkeepPhase, warfarePhase, endPhase]);
 
-function card(defId: string, instanceId: string, tapped = false, drafted = false): CardInstance {
-  return { instanceId, defId, tapped, drafted };
+function card(
+  defId: string,
+  instanceId: string,
+  tapped = false,
+  attachments: CardInstance[] = []
+): CardInstance {
+  return { instanceId, defId, tapped, attachments };
+}
+
+/** A Worker carrying Warfare, for tests that just need front-line combat
+ *  math and don't care how it got there — attaches a real "draft" card
+ *  instance (not a synthetic stub), so hasWarfare and resourceGeneratedBy
+ *  resolve through the actual registry data, exactly like in play. */
+function draftedCard(defId: string, instanceId: string, tapped = false): CardInstance {
+  return card(defId, instanceId, tapped, [card("draft", `${instanceId}-draft`, true)]);
 }
 
 /** A minimal, fully-controlled state for testing one action at a time,
@@ -118,10 +132,10 @@ describe("mulligan", () => {
     expect(after.player.deck.length).toBe(before.player.deck.length + 1);
   });
 
-  it("FINISH_MULLIGAN moves to the first turn phase (draw) without changing the hand", () => {
+  it("FINISH_MULLIGAN moves to the first turn phase (untap) without changing the hand", () => {
     const state = afterCoinToss(setupGame());
     const result = gameReducer(state, { type: "FINISH_MULLIGAN" });
-    expect(result.phase).toBe("draw");
+    expect(result.phase).toBe("untap");
     expect(result.player.hand).toEqual(state.player.hand);
   });
 
@@ -170,9 +184,13 @@ describe("opponent's turn", () => {
     expect(opponentCardIds).toContain("od1");
   });
 
-  it("taps its one untapped resource-generating worker when there's nothing to spare for drafting", () => {
+  it("taps nothing when it isn't planning to draft this turn (below threshold) — no plan, no reason to tap", () => {
     // Only 1 untapped worker: below the AI's own draft threshold (see
-    // game/ai.ts), so this exercises plain tapping in isolation.
+    // game/ai.ts), so there's no draft to fund. Food has no consumer at
+    // all right now (Upkeep is disabled) and unspent resources vanish at
+    // End regardless (see end.ts) — so a policy that plans its taps (every
+    // level except "dumb") taps nothing rather than generating Food no
+    // turn will ever spend.
     const state = stateWith({
       phase: "draw",
       activeSide: "opponent",
@@ -185,67 +203,94 @@ describe("opponent's turn", () => {
     });
     const result = gameReducer(state, { type: "ADVANCE" });
     expect(result.phase).toBe("main");
-    expect(result.opponent.resources).toEqual({ Food: 1, Labor: 0 });
-    expect(result.opponent.lane[0].tapped).toBe(true);
-    expect(result.opponent.lane[0].drafted).toBe(false);
+    expect(result.opponent.resources).toEqual({ Food: 0, Labor: 0 });
+    expect(result.opponent.lane[0].tapped).toBe(false);
   });
 
-  it("plays a Draft card on its front-most untapped worker and taps the rest, once it has enough to spare", () => {
+  it("dumb still taps everything unconditionally, even with nothing to spend it on — its original, unplanned behavior", () => {
+    const state = stateWith({
+      difficulty: "dumb",
+      phase: "draw",
+      activeSide: "opponent",
+      opponent: { deck: [], hand: [], lane: [card("farmer", "ol1")], resources: { Food: 0, Labor: 0 } },
+    });
+    const result = gameReducer(state, { type: "ADVANCE" });
+    expect(result.opponent.resources).toEqual({ Food: 1, Labor: 0 });
+    expect(result.opponent.lane[0].tapped).toBe(true);
+  });
+
+  it("taps exactly the Workers a planned Draft needs to afford both sides of its cost, drafts within the same turn, and leaves the target untouched by the tapping itself", () => {
+    // This is the actual bug fix: drafting used to be checked *before*
+    // this turn's own tapping ran, against resources that are always 0 at
+    // the start of a turn (see end.ts) — so it could only ever succeed
+    // from a test that seeded already-banked resources no real turn could
+    // produce. It was silently dead in real play, at every difficulty.
     const state = stateWith({
       phase: "draw",
       activeSide: "opponent",
       opponent: {
         deck: [],
         hand: [card("draft", "od1")],
-        lane: [card("farmer", "ol1"), card("builder", "ol2")],
-        // Already banked 1 Labor from a previous turn -- exactly the
-        // Draft card's cost (see registry.ts). Drafting happens before
-        // this turn's own tapping, so it can only spend what was saved.
-        resources: { Food: 0, Labor: 1 },
+        // Front-most (array end) is ol3, the draft target -- reserved
+        // untapped the whole way through (a Draft can only target an
+        // untapped Worker). Draft costs 2 Food + 1 Labor, so all three
+        // other Workers are needed to fund it: two Food sources (ol0,
+        // ol1) for the Food side, one Labor source (ol2) for the Labor
+        // side -- nothing here is more than exactly enough.
+        lane: [
+          card("farmer", "ol0"),
+          card("farmer", "ol1"),
+          card("builder", "ol2"),
+          card("builder", "ol3"),
+        ],
+        resources: { Food: 0, Labor: 0 },
       },
     });
     const result = gameReducer(state, { type: "ADVANCE" });
     expect(result.phase).toBe("main");
-    // The front-most card is the *last* element (see Rules/Front-Line
-    // Warfare.md — the array end is the front, not index 0) — so the
-    // builder (ol2) is drafted instead of tapped for Labor; the rear
-    // farmer (ol1) still taps normally. Picking the rearmost instead
-    // (the bug this heuristic used to have) would leave ol1 permanently
-    // stranded at the front, blocking the opponent's own front line.
-    expect(result.opponent.lane[0]).toMatchObject({ instanceId: "ol1", drafted: false, tapped: true });
-    expect(result.opponent.lane[1]).toMatchObject({ instanceId: "ol2", drafted: true, tapped: true });
-    // The banked Labor paid for the draft; this turn's own tapping (ol1's
-    // Food) is unaffected.
-    expect(result.opponent.resources).toEqual({ Food: 1, Labor: 0 });
+    expect(result.opponent.lane[0]).toMatchObject({ instanceId: "ol0", tapped: true });
+    expect(result.opponent.lane[1]).toMatchObject({ instanceId: "ol1", tapped: true });
+    expect(result.opponent.lane[2]).toMatchObject({ instanceId: "ol2", tapped: true });
+    expect(result.opponent.lane[3]).toMatchObject({ instanceId: "ol3", tapped: true });
+    expect(hasWarfare(result.opponent.lane[3])).toBe(true); // the target, and only the target
+    expect(result.opponent.lane.slice(0, 3).every((c) => !hasWarfare(c))).toBe(true);
+    expect(result.opponent.resources).toEqual({ Food: 0, Labor: 0 }); // tapped for it, then spent it
     expect(result.opponent.hasDraftedThisTurn).toBe(true);
-    // The Draft card itself is consumed, same as the player's.
     expect(result.opponent.hand).toHaveLength(0);
-    expect(result.opponent.graveyard.map((c) => c.instanceId)).toEqual(["od1"]);
+    expect(result.opponent.graveyard).toHaveLength(0); // attached, not discarded
   });
 
-  it("doesn't draft without enough Labor to pay the Draft card's cost, even with plenty of untapped workers", () => {
+  it("doesn't draft (and doesn't tap anything) when what's tappable could never cover both sides of the cost", () => {
     const state = stateWith({
       phase: "draw",
       activeSide: "opponent",
       opponent: {
         deck: [],
-        // A second card so the end-of-turn placement step (which always
-        // places hand[0]) doesn't consume the Draft card itself -- that'd
-        // be a separate, unrelated behavior this test isn't about.
+        // A second card so the end-of-turn placement step doesn't consume
+        // the Draft card itself -- that'd be a separate, unrelated
+        // behavior this test isn't about.
         hand: [card("farmer", "oh1"), card("draft", "od1")],
+        // Draft costs 2 Food + 1 Labor. The only Labor source (the
+        // builder) is the front-most/draft target itself -- untappable,
+        // since only an untapped Worker can be drafted -- and the farmer
+        // only generates Food (and only 1 of the 2 needed, at that). Even
+        // tapping everything tappable can never reach the Labor side of
+        // the cost, so the plan is abandoned before any tapping happens
+        // at all (see runOpponentMainPhase's own "no payoff, don't
+        // bother" reasoning).
         lane: [card("farmer", "ol1"), card("builder", "ol2")],
-        resources: { Food: 0, Labor: 0 }, // nothing banked -- can't afford the 1 Labor cost
+        resources: { Food: 0, Labor: 0 },
       },
     });
     const result = gameReducer(state, { type: "ADVANCE" });
-    // No draft happens; both workers just tap normally instead.
-    expect(result.opponent.lane.every((c) => !c.drafted)).toBe(true);
-    expect(result.opponent.resources).toEqual({ Food: 1, Labor: 1 });
+    expect(result.opponent.lane.every((c) => !hasWarfare(c))).toBe(true);
+    expect(result.opponent.lane.every((c) => !c.tapped)).toBe(true); // no payoff, so nothing was tapped either
+    expect(result.opponent.resources).toEqual({ Food: 0, Labor: 0 });
     expect(result.opponent.hasDraftedThisTurn).toBe(false);
     expect(result.opponent.hand.map((c) => c.instanceId)).toEqual(["od1"]); // Draft card unspent
   });
 
-  it("doesn't draft without a Draft card in hand, even with plenty of untapped workers", () => {
+  it("doesn't draft without a Draft card in hand, and taps nothing either — no plan, nothing to fund", () => {
     const state = stateWith({
       phase: "draw",
       activeSide: "opponent",
@@ -257,8 +302,9 @@ describe("opponent's turn", () => {
       },
     });
     const result = gameReducer(state, { type: "ADVANCE" });
-    expect(result.opponent.lane.every((c) => !c.drafted)).toBe(true);
-    expect(result.opponent.resources).toEqual({ Food: 1, Labor: 1 });
+    expect(result.opponent.lane.every((c) => !hasWarfare(c))).toBe(true);
+    expect(result.opponent.lane.every((c) => !c.tapped)).toBe(true);
+    expect(result.opponent.resources).toEqual({ Food: 0, Labor: 0 });
     expect(result.opponent.hasDraftedThisTurn).toBe(false);
   });
 
@@ -277,6 +323,25 @@ describe("opponent's turn", () => {
     expect(result.opponent.lane.map((c) => c.instanceId)).toEqual(["oh1"]);
     expect(result.opponent.hand.map((c) => c.instanceId)).toEqual(["oh2"]);
     expect(result.opponent.hasPlacedWorkerThisTurn).toBe(true);
+  });
+
+  it("skips a Draft card in hand and places the first actual Worker instead — a Draft card is never a valid lane placement", () => {
+    // Reproduces a real bug: the placement step used to just take hand[0]
+    // unconditionally, so a Draft card sitting first in hand landed in
+    // the lane as if it were a Worker.
+    const state = stateWith({
+      phase: "draw",
+      activeSide: "opponent",
+      opponent: {
+        deck: [],
+        hand: [card("draft", "od1"), card("farmer", "oh1")],
+        lane: [],
+        hasPlacedWorkerThisTurn: false,
+      },
+    });
+    const result = gameReducer(state, { type: "ADVANCE" });
+    expect(result.opponent.lane.map((c) => c.defId)).toEqual(["farmer"]);
+    expect(result.opponent.hand.map((c) => c.instanceId)).toEqual(["od1"]); // Draft card untouched, still in hand
   });
 
   it("does not place a second opponent worker once one's already placed this turn", () => {
@@ -298,7 +363,7 @@ describe("opponent's turn", () => {
     expect(gameReducer(state, { type: "TAP_WORKER", instanceId: "l1" })).toBe(state);
   });
 
-  it("resets the opponent's tapped/resources/placement state when its End phase resolves", () => {
+  it("resets the opponent's resources/placement state when its End phase resolves, but leaves tapped cards tapped", () => {
     const state = stateWith({
       phase: "end",
       activeSide: "opponent",
@@ -311,7 +376,148 @@ describe("opponent's turn", () => {
     const result = gameReducer(state, { type: "ADVANCE" });
     expect(result.opponent.resources).toEqual({ Food: 0, Labor: 0 });
     expect(result.opponent.hasPlacedWorkerThisTurn).toBe(false);
-    expect(result.opponent.lane[0].tapped).toBe(false);
+    // Not untapped here — see untap.ts. A card tapped this turn needs to
+    // stay tapped through the other side's entire following turn (that's
+    // the whole point of tapping something); untapping too early here
+    // would erase that downside before it ever mattered.
+    expect(result.opponent.lane[0].tapped).toBe(true);
+  });
+});
+
+describe("AI difficulty", () => {
+  it("easy never drafts, even with plenty of untapped workers and an affordable cost", () => {
+    const state = stateWith({
+      difficulty: "easy",
+      opponent: {
+        hand: [card("draft", "od1")],
+        lane: [card("farmer", "ol1"), card("builder", "ol2"), card("farmer", "ol3")],
+        resources: { Food: 0, Labor: 1 },
+      },
+    });
+    const result = runOpponentMainPhase(state);
+    expect(result.opponent.lane.every((c) => !hasWarfare(c))).toBe(true);
+    expect(result.opponent.hand.map((c) => c.instanceId)).toEqual(["od1"]);
+  });
+
+  it("hard holds back from drafting with only 2 untapped workers (needs 3), where dumb/normal would draft", () => {
+    const shared = {
+      hand: [card("draft", "od1")],
+      // Both Builders (Labor), with Food pre-banked to exactly cover the
+      // Food side of Draft's 2 Food + 1 Labor cost -- so tapping the one
+      // non-target Builder for Labor is enough to make the whole cost
+      // reachable, isolating this test to the *threshold* gate (2 untapped
+      // Workers vs. hard's 3) rather than affordability.
+      lane: [card("builder", "ol1"), card("builder", "ol2")],
+      resources: { Food: 2, Labor: 0 },
+    };
+    const hardResult = runOpponentMainPhase(stateWith({ difficulty: "hard", opponent: shared }));
+    expect(hardResult.opponent.lane.every((c) => !hasWarfare(c))).toBe(true);
+
+    const normalResult = runOpponentMainPhase(stateWith({ difficulty: "normal", opponent: shared }));
+    expect(normalResult.opponent.lane.some((c) => hasWarfare(c))).toBe(true);
+  });
+
+  it("hard places whichever Worker matches its unaffordable Draft card's cost, instead of just the first in hand", () => {
+    // Draft costs 2 Food + 1 Labor (see registry.ts) -- already has
+    // enough Food banked, short only on Labor, so hard should reach past
+    // the Farmer in hand for the Builder, setting its economy up to
+    // afford drafting sooner. Normal/dumb just take hand[0], the Farmer,
+    // since they don't plan ahead like this.
+    const state = stateWith({
+      difficulty: "hard",
+      opponent: {
+        hand: [card("farmer", "oh1"), card("builder", "oh2"), card("draft", "od1")],
+        lane: [],
+        resources: { Food: 2, Labor: 0 },
+        hasPlacedWorkerThisTurn: false,
+      },
+    });
+    const result = runOpponentMainPhase(state);
+    expect(result.opponent.lane.map((c) => c.defId)).toEqual(["builder"]);
+
+    const normalResult = runOpponentMainPhase({ ...state, difficulty: "normal" });
+    expect(normalResult.opponent.lane.map((c) => c.defId)).toEqual(["farmer"]);
+  });
+
+  it("shouldOpponentAttack: dumb swings with anything, win or lose; normal only when at least even; hard only when strictly winning; easy never", () => {
+    // Opponent's front (2) is smaller than the player's (3) — a losing
+    // trade for the opponent.
+    const losing = stateWith({
+      player: { lane: [draftedCard("farmer", "p1"), draftedCard("farmer", "p2"), draftedCard("farmer", "p3")] },
+      opponent: { lane: [draftedCard("farmer", "o1"), draftedCard("farmer", "o2")] },
+    });
+    expect(shouldOpponentAttack({ ...losing, difficulty: "dumb" })).toBe(true);
+    expect(shouldOpponentAttack({ ...losing, difficulty: "normal" })).toBe(false);
+    expect(shouldOpponentAttack({ ...losing, difficulty: "hard" })).toBe(false);
+    expect(shouldOpponentAttack({ ...losing, difficulty: "easy" })).toBe(false);
+
+    // Even front lines (2 vs 2) — a neutral trade.
+    const even = stateWith({
+      player: { lane: [draftedCard("farmer", "p1"), draftedCard("farmer", "p2")] },
+      opponent: { lane: [draftedCard("farmer", "o1"), draftedCard("farmer", "o2")] },
+    });
+    expect(shouldOpponentAttack({ ...even, difficulty: "normal" })).toBe(true);
+    expect(shouldOpponentAttack({ ...even, difficulty: "hard" })).toBe(false);
+
+    // Opponent's front (2) beats the player's (1) — a strictly winning trade.
+    const winning = stateWith({
+      player: { lane: [draftedCard("farmer", "p1")] },
+      opponent: { lane: [draftedCard("farmer", "o1"), draftedCard("farmer", "o2")] },
+    });
+    expect(shouldOpponentAttack({ ...winning, difficulty: "hard" })).toBe(true);
+  });
+});
+
+describe("untap phase", () => {
+  it("untaps only the side whose turn is starting, not the other side", () => {
+    const state = stateWith({
+      phase: "untap",
+      activeSide: "player",
+      player: { lane: [card("farmer", "l1", true)] },
+      opponent: { lane: [card("builder", "o1", true)] },
+    });
+    const result = gameReducer(state, { type: "ADVANCE" });
+    expect(result.player.lane[0].tapped).toBe(false);
+    expect(result.opponent.lane[0].tapped).toBe(true);
+    expect(result.phase).toBe("draw");
+  });
+
+  it("leaves a drafted card's attachments alone — untapping doesn't undraft it", () => {
+    const state = stateWith({
+      phase: "untap",
+      player: { lane: [draftedCard("farmer", "l1", true)] },
+    });
+    const result = gameReducer(state, { type: "ADVANCE" });
+    expect(result.player.lane[0].tapped).toBe(false);
+    expect(hasWarfare(result.player.lane[0])).toBe(true);
+  });
+
+  it("a card tapped on turn 1 is still tapped throughout the opponent's turn, and only clears at the start of the player's next turn", () => {
+    // The exact bug this phase fixes: tapping used to be undone by the
+    // tapping side's own End phase, so it was already gone before the
+    // other side ever got a turn — no real downside to tapping anything.
+    const afterPlayerTaps = stateWith({
+      phase: "end",
+      activeSide: "player",
+      firstSide: "player",
+      player: { lane: [card("farmer", "l1", true)] },
+    });
+
+    const duringOpponentTurn = gameReducer(afterPlayerTaps, { type: "ADVANCE" }); // end -> untap (opponent)
+    expect(duringOpponentTurn.activeSide).toBe("opponent");
+    expect(duringOpponentTurn.player.lane[0].tapped).toBe(true);
+
+    const stillDuringOpponentTurn = gameReducer(duringOpponentTurn, { type: "ADVANCE" }); // untap -> draw
+    expect(stillDuringOpponentTurn.player.lane[0].tapped).toBe(true);
+
+    const opponentEnds = { ...stillDuringOpponentTurn, phase: "end" as const };
+    const backToPlayerUntap = gameReducer(opponentEnds, { type: "ADVANCE" }); // end -> untap (player)
+    expect(backToPlayerUntap.activeSide).toBe("player");
+    expect(backToPlayerUntap.phase).toBe("untap");
+    expect(backToPlayerUntap.player.lane[0].tapped).toBe(true); // not yet -- untap hasn't resolved
+
+    const afterPlayerUntaps = gameReducer(backToPlayerUntap, { type: "ADVANCE" }); // untap -> draw
+    expect(afterPlayerUntaps.player.lane[0].tapped).toBe(false);
   });
 });
 
@@ -334,6 +540,14 @@ describe("main phase", () => {
     expect(gameReducer(secondAttempt, { type: "PLACE_WORKER", instanceId: "h2" })).toBe(
       secondAttempt
     );
+  });
+
+  it("refuses PLACE_WORKER for a non-Worker card (a Draft card can't be placed into the lane)", () => {
+    const state = stateWith({
+      phase: "main",
+      player: { hand: [card("draft", "d1")], lane: [], hasPlacedWorkerThisTurn: false },
+    });
+    expect(gameReducer(state, { type: "PLACE_WORKER", instanceId: "d1" })).toBe(state);
   });
 
   it("taps a Farmer for Food and a Builder for Labor", () => {
@@ -361,23 +575,23 @@ describe("main phase", () => {
     expect(result).toBe(state);
   });
 
-  it("refuses to tap a drafted card for a resource — it doesn't generate one anymore", () => {
+  it("a Draft attachment's penalty fully offsets a Basic Worker's resource — tapping a drafted Farmer generates nothing", () => {
     const state = stateWith({
       phase: "main",
-      player: { lane: [card("farmer", "l1", false, true)] }, // untapped but drafted
+      player: { lane: [draftedCard("farmer", "l1")] }, // untapped, already carrying a real Draft attachment
     });
     const result = gameReducer(state, { type: "TAP_WORKER", instanceId: "l1" });
-    expect(result).toBe(state);
+    expect(result).toBe(state); // a full no-op: Draft's -1 Food fully offsets a Farmer's printed 1
   });
 
-  it("drafts an untapped Worker into Warfare via a Draft card, paying its Labor cost and discarding the Draft card", () => {
+  it("attaches a Draft card (rather than discarding it) to an untapped Worker, paying its 2 Food + 1 Labor cost, and the target's own resource is fully offset going forward", () => {
     const state = stateWith({
       phase: "main",
       player: {
         hand: [card("draft", "d1")],
         lane: [card("farmer", "l1")],
         hasDraftedThisTurn: false,
-        resources: { Food: 0, Labor: 1 },
+        resources: { Food: 2, Labor: 1 },
       },
     });
     const result = gameReducer(state, {
@@ -385,21 +599,37 @@ describe("main phase", () => {
       cardInstanceId: "d1",
       targetInstanceId: "l1",
     });
-    expect(result.player.lane[0]).toMatchObject({ instanceId: "l1", drafted: true, tapped: true });
+    const target = result.player.lane[0];
+    // Tapped (its action for this turn is spent, same as before), but not
+    // flipped and not discarded -- it's still the same Farmer, now with a
+    // Draft card attached behind it (see types.ts's CardInstance.attachments).
+    expect(target.instanceId).toBe("l1");
+    expect(target.tapped).toBe(true);
+    expect(target.attachments.map((a) => a.defId)).toEqual(["draft"]);
+    expect(hasWarfare(target)).toBe(true);
     expect(result.player.hand).toHaveLength(0);
-    expect(result.player.graveyard.map((c) => c.instanceId)).toEqual(["d1"]);
+    expect(result.player.graveyard).toHaveLength(0); // attached, not discarded
     expect(result.player.hasDraftedThisTurn).toBe(true);
-    expect(result.player.resources).toEqual({ Food: 0, Labor: 0 }); // 1 Labor spent
+    expect(result.player.resources).toEqual({ Food: 0, Labor: 0 }); // 2 Food + 1 Labor spent
+
+    // Next turn, once untapped, its own resource generation is fully
+    // offset by the attachment's penalty (see components/queries.ts's
+    // resourceGeneratedBy) -- tapping it does nothing productive.
+    const untappedState = {
+      ...result,
+      player: { ...result.player, lane: [{ ...target, tapped: false }] },
+    };
+    expect(gameReducer(untappedState, { type: "TAP_WORKER", instanceId: "l1" })).toBe(untappedState);
 
     // A second draft the same turn is refused, even with another Draft
-    // card, a different target, and Labor to spare.
+    // card, a different target, and resources to spare.
     const secondAttempt = stateWith({
       phase: "main",
       player: {
         hand: [card("draft", "d2")],
         lane: [card("farmer", "l1"), card("builder", "l2")],
         hasDraftedThisTurn: true,
-        resources: { Food: 0, Labor: 1 },
+        resources: { Food: 2, Labor: 1 },
       },
     });
     expect(
@@ -407,7 +637,7 @@ describe("main phase", () => {
     ).toBe(secondAttempt);
   });
 
-  it("refuses to draft without enough Labor to pay the Draft card's cost", () => {
+  it("refuses to draft without enough resources to pay the Draft card's Food+Labor cost", () => {
     const state = stateWith({
       phase: "main",
       player: {
@@ -425,6 +655,24 @@ describe("main phase", () => {
     expect(result).toBe(state); // a full no-op, same as any other refused DRAFT
   });
 
+  it("refuses to draft with only one of the two required resources — the cost is all-or-nothing", () => {
+    const state = stateWith({
+      phase: "main",
+      player: {
+        hand: [card("draft", "d1")],
+        lane: [card("farmer", "l1")],
+        hasDraftedThisTurn: false,
+        resources: { Food: 2, Labor: 0 }, // Food fully covered, Labor isn't
+      },
+    });
+    const result = gameReducer(state, {
+      type: "DRAFT",
+      cardInstanceId: "d1",
+      targetInstanceId: "l1",
+    });
+    expect(result).toBe(state);
+  });
+
   it("refuses to draft a tapped or already-drafted target", () => {
     const tappedState = stateWith({
       phase: "main",
@@ -436,7 +684,9 @@ describe("main phase", () => {
 
     const draftedState = stateWith({
       phase: "main",
-      player: { hand: [card("draft", "d1")], lane: [card("farmer", "l1", true, true)] },
+      // Untapped (unlike tappedState above), isolating this to the
+      // "already carries Warfare" refusal reason specifically.
+      player: { hand: [card("draft", "d1")], lane: [draftedCard("farmer", "l1")] },
     });
     expect(
       gameReducer(draftedState, { type: "DRAFT", cardInstanceId: "d1", targetInstanceId: "l1" })
@@ -582,16 +832,16 @@ describe("warfare combat", () => {
       phase: "warfare",
       player: {
         lane: [
-          card("farmer", "p1", false, true), // rear: drafted+untapped, but blocked by p2 ahead of it
+          draftedCard("farmer", "p1"), // rear: drafted+untapped, but blocked by p2 ahead of it
           card("farmer", "p2"), // undrafted Worker: blocks anything behind it (toward the rear)
-          card("farmer", "p3", false, true), // front (array end): counts (correct total = 1)
+          draftedCard("farmer", "p3"), // front (array end): counts (correct total = 1)
         ],
       },
       // Opponent's front-line is also 1: if the player's front-line is
       // correctly computed as 1 too, this is a TIE (mutual wipe). If the
       // block above were ignored (a bug counting p1 too), the player would
       // show 2 and this would wrongly resolve as a decisive win instead.
-      opponent: { lane: [card("builder", "o1", false, true)] },
+      opponent: { lane: [draftedCard("builder", "o1")] },
     });
     const result = gameReducer(state, { type: "RESOLVE_WARFARE" });
     expect(result.player.lane.map((c) => c.instanceId)).toEqual(["p1", "p2"]);
@@ -605,11 +855,11 @@ describe("warfare combat", () => {
       phase: "warfare",
       player: {
         lane: [
-          card("farmer", "p1", false, true), // rear: untapped Warfare, but behind a blocker
-          card("farmer", "p2", true, true), // front (array end): drafted but tapped -> doesn't count, blocks p1
+          draftedCard("farmer", "p1"), // rear: untapped Warfare, but behind a blocker
+          draftedCard("farmer", "p2", true), // front (array end): drafted but tapped -> doesn't count, blocks p1
         ],
       },
-      opponent: { lane: [card("builder", "o1", false, true)] },
+      opponent: { lane: [draftedCard("builder", "o1")] },
     });
     const result = gameReducer(state, { type: "RESOLVE_WARFARE" });
     // Player's front line is 0 (p2 is tapped, blocking p1) -- so the
@@ -630,9 +880,9 @@ describe("warfare combat", () => {
     const state = stateWith({
       phase: "warfare",
       player: {
-        lane: [card("farmer", "p1", true, true), card("farmer", "p2", true, true)], // both tapped Warfare, both immune
+        lane: [draftedCard("farmer", "p1", true), draftedCard("farmer", "p2", true)], // both tapped Warfare, both immune
       },
-      opponent: { lane: [card("builder", "o1", false, true)] },
+      opponent: { lane: [draftedCard("builder", "o1")] },
     });
     const result = gameReducer(state, { type: "RESOLVE_WARFARE" });
     // playerFront = 0 (p2 is tapped, breaks the run before even reaching
@@ -652,7 +902,7 @@ describe("warfare combat", () => {
     // power for -- 1 Warfare kills 1 card here, not all 4.
     const state = stateWith({
       phase: "warfare",
-      player: { lane: [card("farmer", "p1", false, true)] }, // 1 front-line Warfare
+      player: { lane: [draftedCard("farmer", "p1")] }, // 1 front-line Warfare
       opponent: {
         lane: [
           card("builder", "o1"),
@@ -677,13 +927,13 @@ describe("warfare combat", () => {
         // doesn't matter for the count, only for which one is nearest
         // the front (array end) once destruction picks a card.
         lane: [
-          card("farmer", "p1", false, true),
-          card("farmer", "p2", false, true),
-          card("farmer", "p3", false, true),
+          draftedCard("farmer", "p1"),
+          draftedCard("farmer", "p2"),
+          draftedCard("farmer", "p3"),
         ],
       },
       opponent: {
-        lane: [card("builder", "o2"), card("builder", "o1", false, true)], // o2 rear (Worker), o1 front (array end)
+        lane: [card("builder", "o2"), draftedCard("builder", "o1")], // o2 rear (Worker), o1 front (array end)
       },
     });
     const result = gameReducer(state, { type: "RESOLVE_WARFARE" });
@@ -708,9 +958,9 @@ describe("warfare combat", () => {
       phase: "warfare",
       player: {
         lane: [
-          card("farmer", "p1", false, true),
-          card("farmer", "p2", false, true),
-          card("farmer", "p3", false, true), // 3 front-line Warfare
+          draftedCard("farmer", "p1"),
+          draftedCard("farmer", "p2"),
+          draftedCard("farmer", "p3"), // 3 front-line Warfare
         ],
       },
       opponent: {
@@ -721,7 +971,7 @@ describe("warfare combat", () => {
           card("builder", "ox1"),
           card("builder", "ox2"),
           card("builder", "ox3"),
-          card("builder", "o1", false, true),
+          draftedCard("builder", "o1"),
         ],
       },
     });
@@ -742,13 +992,13 @@ describe("warfare combat", () => {
       player: {
         // p3 (a plain Worker) sits at the rear; p1/p2 (drafted+untapped)
         // are the front two, at the array's end.
-        lane: [card("farmer", "p3"), card("farmer", "p1", false, true), card("farmer", "p2", false, true)],
+        lane: [card("farmer", "p3"), draftedCard("farmer", "p1"), draftedCard("farmer", "p2")],
       },
       opponent: {
         lane: [
           card("builder", "o3"),
-          card("builder", "o1", false, true),
-          card("builder", "o2", false, true),
+          draftedCard("builder", "o1"),
+          draftedCard("builder", "o2"),
         ],
       },
     });
@@ -777,7 +1027,7 @@ describe("warfare: declining to attack", () => {
   it("ADVANCE alone (skipping the attack, no RESOLVE_WARFARE) leaves both front lines completely untouched", () => {
     const state = stateWith({
       phase: "warfare",
-      player: { lane: [card("farmer", "p1", false, true)] },
+      player: { lane: [draftedCard("farmer", "p1")] },
       opponent: { lane: [card("builder", "o1")] },
     });
     const result = gameReducer(state, { type: "ADVANCE" });
@@ -816,12 +1066,14 @@ describe("turn order (coin toss + alternating turns)", () => {
       },
     });
     const result = gameReducer(state, { type: "ADVANCE" });
-    expect(result.phase).toBe("draw");
+    expect(result.phase).toBe("untap");
     expect(result.activeSide).toBe("opponent");
     expect(result.turn).toBe(1); // same round — the opponent hasn't gone yet
     expect(result.player.resources).toEqual({ Food: 0, Labor: 0 });
     expect(result.player.hasPlacedWorkerThisTurn).toBe(false);
-    expect(result.player.lane[0].tapped).toBe(false);
+    // Still tapped — it's the opponent's turn now, not the player's next
+    // one, so nothing should have untapped the player's lane yet.
+    expect(result.player.lane[0].tapped).toBe(true);
   });
 
   it("End starts a new round, back at the first side, once the second side finishes", () => {
@@ -837,12 +1089,13 @@ describe("turn order (coin toss + alternating turns)", () => {
       },
     });
     const result = gameReducer(state, { type: "ADVANCE" });
-    expect(result.phase).toBe("draw");
+    expect(result.phase).toBe("untap");
     expect(result.activeSide).toBe("player");
     expect(result.turn).toBe(2); // round complete — a new one begins
     expect(result.opponent.resources).toEqual({ Food: 0, Labor: 0 });
     expect(result.opponent.hasPlacedWorkerThisTurn).toBe(false);
-    expect(result.opponent.lane[0].tapped).toBe(false);
+    // Still tapped until the opponent's own next Untap phase resolves.
+    expect(result.opponent.lane[0].tapped).toBe(true);
   });
 });
 

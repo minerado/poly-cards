@@ -6,6 +6,7 @@ import { endPhase } from "./end";
 import { mainPhase } from "./main";
 import { mulliganPhase } from "./mulligan";
 import type { PhaseCtx, PhaseDef } from "./types";
+import { untapPhase } from "./untap";
 // import { upkeepPhase } from "./upkeep"; // <- disabled, see TURN_PHASES below
 import { warfarePhase } from "./warfare";
 
@@ -22,6 +23,7 @@ import { warfarePhase } from "./warfare";
  * checks, and every "Next" button's label all stay correct automatically.
  */
 export const TURN_PHASES: PhaseDef[] = [
+  untapPhase,
   drawPhase,
   mainPhase,
   // upkeepPhase, // <- disabled while this mechanic is still being designed
@@ -66,7 +68,10 @@ export function createReducer(turnPhases: PhaseDef[]) {
   const ctx = buildPhaseCtx(turnPhases, allPhases);
 
   return function reducer(state: GameState, action: Action): GameState {
-    if (action.type === "RESTART") return setupGame();
+    // Keeps the difficulty the player picked at the main menu — RESTART is
+    // "play again", not "back to menu and reconfigure" (that's a separate
+    // exit path — see GameBoard's onExitToMenu).
+    if (action.type === "RESTART") return setupGame(state.difficulty);
     if (state.gameOver) return state;
 
     const phase = byName.get(state.phase);

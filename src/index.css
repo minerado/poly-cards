@@ -71,6 +71,70 @@ button {
   overflow: hidden;
 }
 
+/* One shared layer every particle burst spawns into (see particles.ts) —
+   `fixed` + `inset: 0` so a particle's `left`/`top` can just be the
+   viewport coordinates getBoundingClientRect already hands the FLIP
+   effect, no extra offset math. Sits above the board's own `overflow:
+   hidden` (a particle drifting a few px past a lane's edge should still
+   be visible, not clipped away). */
+.board-particles {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 500;
+}
+
+.particle {
+  position: absolute;
+  width: var(--particle-size, 4px);
+  height: var(--particle-size, 4px);
+  border-radius: 50%;
+  /* A bright, fixed amber, not one of the card's own light wood tones —
+     a burst starts right on top of the card it came from (its own
+     center) and mostly drifts within the card's own footprint rather
+     than reaching the dark board behind it, so matching the card's tones
+     left it nearly invisible against its own light face for its whole
+     life. The glow does the same job a second way, working even on the
+     one moment a particle does cross onto the dark background. */
+  background: #f0c674;
+  box-shadow: 0 0 4px 1px rgba(240, 198, 116, 0.65);
+  transform: translate(-50%, -50%);
+  animation: particle-spill 0.5s ease-out forwards;
+}
+
+@keyframes particle-spill {
+  from {
+    transform: translate(-50%, -50%) translate(0, 0) scale(1);
+    opacity: 0.9;
+  }
+  to {
+    transform: translate(-50%, -50%) translate(var(--particle-dx), var(--particle-dy)) scale(0.3);
+    opacity: 0;
+  }
+}
+
+/* The drag trail: a sprinkle dropped every so often along the path a
+   dragged card is carried over (see GameBoard's handleDragMove and
+   particles.ts's spawnTrailParticles) — mostly falling (a small, mostly
+   downward --particle-dx/--particle-dy pair, not the burst's all-directions
+   spread above), like dust shaken loose as the card passes, settling
+   toward the board instead of scattering off it. */
+.particle--trail {
+  animation-name: particle-fall;
+  animation-duration: 0.6s;
+}
+
+@keyframes particle-fall {
+  from {
+    transform: translate(-50%, -50%) translate(0, 0) scale(1);
+    opacity: 0.85;
+  }
+  to {
+    transform: translate(-50%, -50%) translate(var(--particle-dx), var(--particle-dy)) scale(0.4);
+    opacity: 0;
+  }
+}
+
 /* ---------- Wooden game-board surface ---------- */
 
 .wood-board {
@@ -361,6 +425,23 @@ button {
 .lane__slot {
   display: flex;
   position: relative;
+  /* Set from JS (see useShingleOverlap) once the lane's natural width
+     would exceed its available space — 0 (nothing pulled in beyond the
+     zone's own gap) while there's room. Margin, not a shrunk `gap`,
+     because flexbox `gap` can't go negative; this stacks on top of
+     .lane__zone's own gap the same way, just in the other direction.
+     Later cards paint over earlier ones via plain DOM order (no z-index
+     needed) — a natural "most recently placed is on top" read. */
+  margin-left: calc(-1 * var(--shingle-overlap, 0px));
+}
+
+.lane__zone--reversed .lane__slot {
+  /* The opponent's lane fills right-to-left (row-reverse) — physical
+     margin-left doesn't flip with flex-direction, so the overlap has to
+     be re-aimed at margin-right by hand to still pull each token toward
+     its DOM-order predecessor instead of away from it. */
+  margin-left: 0;
+  margin-right: calc(-1 * var(--shingle-overlap, 0px));
 }
 
 /* Where a dragged card would land if dropped right now (see
@@ -663,6 +744,66 @@ button {
   transition: transform 0.16s ease, box-shadow 0.16s ease;
 }
 
+/* The dragged card's own look while airborne — not an idle ambient
+   animation (tried that on every resting lane token first; it read as
+   restless/distracting rather than alive, see the conversation this came
+   out of). "Floating" now means specifically "being carried right now":
+   lifted a few px and gently bobbing to read as held rather than static,
+   tilted by drag velocity (see GameBoard's runDragTiltLoop), and casting
+   a soft ground shadow that stays put — and breathes opposite the bob,
+   see .drag-ghost__shadow — while the card rises away from it. Scoped to
+   .drag-ghost (a wrapper only the in-flight drag copy renders inside, see
+   GameBoard.tsx) rather than a prop threaded through CardView, so turning
+   it on/off for a given render is just whether that wrapper is used — no
+   new prop surface for what's currently a single call site.
+
+   --drag-tilt is written straight to .drag-ghost's own inline style every
+   animation frame (see runDragTiltLoop), not passed as a prop through
+   React — a CSS custom property is just a value substituted at paint
+   time, so referencing it with var() here picks up each frame's write
+   live, the same way .card--tapped already relies on --jitter updating
+   mid-animation. */
+@keyframes drag-hold-bob {
+  0%,
+  100% {
+    transform: translateY(-10px) rotate(var(--drag-tilt, 0deg));
+  }
+  50% {
+    transform: translateY(-15px) rotate(var(--drag-tilt, 0deg));
+  }
+}
+
+.drag-ghost .card--lane {
+  animation: drag-hold-bob 1.1s ease-in-out infinite;
+  box-shadow: 0 18px 30px rgba(0, 0, 0, 0.5);
+}
+
+@keyframes drag-hold-shadow {
+  0%,
+  100% {
+    transform: translateX(-50%) scale(1);
+    opacity: 0.55;
+  }
+  50% {
+    transform: translateX(-50%) scale(0.82);
+    opacity: 0.35;
+  }
+}
+
+.drag-ghost__shadow {
+  position: absolute;
+  left: 50%;
+  bottom: -8px;
+  width: 60%;
+  height: 12px;
+  background: radial-gradient(ellipse, rgba(0, 0, 0, 0.45), transparent 70%);
+  filter: blur(1px);
+  /* Same duration/easing as drag-hold-bob above (and no delay on either),
+     so the shadow shrinks/fades exactly as the card rises and grows back
+     exactly as it settles, instead of drifting out of sync with it. */
+  animation: drag-hold-shadow 1.1s ease-in-out infinite;
+}
+
 .card--lane:hover {
   z-index: 40;
   box-shadow: 0 6px 16px rgba(0, 0, 0, 0.45);
@@ -728,6 +869,19 @@ button {
   font-size: 1.3em;
 }
 
+/* Top-right cost badges (see CardView.tsx's CardFace) — same spot MTG
+   puts its mana cost, sitting over the name bar rather than pushing it
+   down, since a card's cost is only ever 1-3 pips at this card size. */
+.card__cost {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  z-index: 2;
+  display: flex;
+  gap: 2px;
+  font-size: 0.75em;
+}
+
 .card__typeline {
   flex: none;
   padding: 2px 8px;
@@ -779,6 +933,41 @@ button {
   position: relative;
   display: inline-flex;
   align-items: flex-end;
+  /* Contains .card__attachment's negative z-index (see below) to this
+     slot, instead of it escaping to compete with sibling lane tokens'
+     own stacking (some of which set positive z-index on hover/drag). */
+  isolation: isolate;
+}
+
+/* An attachment (see types.ts's CardInstance.attachments) — a small plate
+   peeking out from behind the host card, e.g. a Draft Order. Sized and
+   positioned to match the host exactly, then pushed back and to the
+   corner so only a sliver shows. Negative z-index puts it behind the host
+   button; isolation on .card-slot (above) keeps that from reaching outside
+   this one card. */
+.card__attachments {
+  position: absolute;
+  inset: 0;
+}
+
+.card__attachment {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background: url("/cards/card-back.png") center / cover no-repeat;
+  image-rendering: pixelated;
+  border: 1px solid var(--card-border);
+  border-radius: inherit;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
+  /* Peeks out above the host, never to either side: a lane's shingle
+     overlap only ever pulls a card horizontally onto its *previous*
+     neighbor (see .lane__slot's negative margin) — a sideways peek here
+     sat exactly on the edge that gets buried under the next card the
+     moment the lane has more than one token, making it invisible in
+     practice (the bug an upward-only peek fixes). Deeper attachments
+     (higher --stack-depth) sit further back and higher up, so a stack
+     reads as a fanned deck. */
+  transform: translateY(calc(var(--stack-depth, 1) * -7px)) rotate(calc(var(--stack-depth, 1) * 2deg));
 }
 
 /* Gets its shape (size, border, background) from the base .card rule via
@@ -803,23 +992,24 @@ button {
 }
 
 .card--tapped {
-  opacity: 0.55;
+  /* Not opacity — a faded card reads as "disabled/greyed out" (a UI
+     state), not "turned sideways" (a physical one), which fights the rest
+     of the board's tactile styling. Desaturating + darkening instead reads
+     as pressed into the table rather than faded away, and (unlike a full
+     ~90deg tap) needs no extra lateral clearance, so it still holds up
+     once .lane__slot's shingle overlap (see index.css's --shingle-overlap)
+     packs tokens close together. */
+  filter: saturate(0.55) brightness(0.8);
   /* Adds to (rather than replaces) the lane token's own --jitter, so a
      tapped worker keeps its tossed-down look instead of snapping upright
-     before rotating. */
-  transform: rotate(calc(6deg + var(--jitter, 0deg)));
+     before rotating. 24deg (vs. --jitter's few degrees) is deliberately
+     well past "resting crooked" so tapped reads as a distinct pose, not
+     just a jitter outlier. */
+  transform: rotate(calc(24deg + var(--jitter, 0deg)));
 }
 
 .card--highlight {
   box-shadow: 0 0 0 2px var(--danger);
-}
-
-/* Drafted into Warfare (see Rules/Draft Ability.md) — just a border/glow
-   tint, not opacity or transform, so it layers cleanly with .card--tapped
-   (a just-drafted card is always both at once) instead of fighting it. */
-.card--drafted {
-  border-color: #b23b3b;
-  box-shadow: 0 0 0 1px rgba(178, 59, 59, 0.55);
 }
 
 /* A valid target while a Draft card (or some future targeted ability) is
@@ -827,19 +1017,6 @@ button {
    meaning (Upkeep sacrifice) so the two are never confusable. */
 .card--targetable {
   box-shadow: 0 0 0 2px var(--accent), 0 0 14px rgba(217, 176, 84, 0.6);
-}
-
-/* Positions the Warfare badge over a drafted card's bare back art (see
-   CardView.tsx) — that button has no namebar/artbox structure to hang a
-   normal .card__resourcebar off, so this pins it near the bottom instead. */
-.card__resourcebar--back {
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 6px;
-  margin: 0;
-  border-top: none;
-  font-size: 1.5em;
 }
 
 /* ---------- Hand ---------- */
@@ -1350,11 +1527,43 @@ button {
 }
 
 .menu-screen__tagline {
-  margin: 0 0 36px;
+  margin: 0 0 24px;
   font-size: 13px;
   color: var(--text);
   opacity: 0.75;
   text-align: center;
+}
+
+.menu-screen__difficulty {
+  display: flex;
+  gap: 2px;
+  margin: 0 0 28px;
+  padding: 3px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.25);
+  border: 1px solid var(--panel-border);
+}
+
+.menu-screen__difficulty-item {
+  all: unset;
+  cursor: pointer;
+  padding: 6px 16px;
+  border-radius: 999px;
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  color: var(--text);
+  opacity: 0.65;
+  transition: opacity 0.12s ease, background 0.12s ease, color 0.12s ease;
+}
+
+.menu-screen__difficulty-item:hover {
+  opacity: 0.9;
+}
+
+.menu-screen__difficulty-item--selected {
+  background: var(--accent-bg);
+  color: var(--accent);
+  opacity: 1;
 }
 
 .menu-screen__nav {

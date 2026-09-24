@@ -4,11 +4,19 @@ import { DndContext, PointerSensor, useSensor, useSensors } from "@dnd-kit/core"
 import type { DragCancelEvent, DragEndEvent, DragMoveEvent, DragStartEvent } from "@dnd-kit/core";
 import { getEventCoordinates } from "@dnd-kit/utilities";
 import { ArrowLeft, ArrowRight, Menu, ScrollText, Swords } from "lucide-react";
-import { costOf, definitionOf, hasDraftAbility } from "../game/components/queries";
+import { shouldOpponentAttack } from "../game/ai";
+import {
+  canAfford,
+  costOf,
+  definitionOf,
+  hasWarfare,
+  isAttachable,
+  resourceGeneratedBy,
+} from "../game/components/queries";
 import { findPhaseDef, gameReducer, phaseCtx } from "../game/phases";
 import { frontLine } from "../game/phases/warfare";
 import { setupGame } from "../game/setup";
-import type { CardInstance } from "../game/types";
+import type { CardInstance, Difficulty } from "../game/types";
 import { CardView } from "./CardView";
 import { DrawAnimation } from "./DrawAnimation";
 import { PhaseNarrator } from "./PhaseNarrator";
@@ -17,8 +25,10 @@ import { FoodBadge, LaborBadge } from "./ResourceBadges";
 import { HandFan } from "./HandFan";
 import { CoinTossOverlay } from "./CoinTossOverlay";
 import { MulliganOverlay } from "./MulliganOverlay";
-import { HandTuningProvider } from "../dev/handTuning";
+import { HandTuningProvider, useHandTuning } from "../dev/handTuning";
 import { HandTuningPanel } from "../dev/HandTuningPanel";
+import { useShingleOverlap } from "./useShingleOverlap";
+import { spawnMoveParticles, spawnTrailParticles } from "./particles";
 
 /** Is `point` inside `rect`? Takes anything DOMRect-shaped
  *  (top/left/right/bottom) — a real DOMRect or dnd-kit's own rect type
@@ -101,17 +111,44 @@ type AttackState =
 const IDLE_ATTACK_STATE: AttackState = { status: "idle" };
 const SWING_MS = 380;
 const DYING_MS = 340;
+// Must match .lane__zone's own `gap` in index.css — the shingle math needs
+// the real spacing it's shrinking to know when tokens have actually run
+// out of room.
+const LANE_BASE_GAP = 14;
+// However crowded a lane gets, a tapped/untapped token never loses more
+// than tokenWidth - LANE_MIN_PEEK of itself under its neighbor — see
+// shingleLayout.ts.
+const LANE_MIN_PEEK = 26;
+// The flying drag copy's "lean into the direction of travel" tilt (see
+// handleDragMove) — degrees per px of horizontal pointer movement since
+// the last move event, capped, then eased toward rather than snapped to.
+const DRAG_TILT_SENSITIVITY = 1.1;
+const DRAG_TILT_MAX_DEG = 22;
+const DRAG_TILT_SMOOTHING = 0.35;
+// Per-frame multiplier the target tilt decays by while the pointer isn't
+// actively adding to it — 0.88 of the previous value every ~16ms lands
+// back near 0 well under a second after the pointer stops.
+const DRAG_TILT_DECAY = 0.88;
 
 interface GameBoardProps {
   onExitToMenu: () => void;
+  difficulty: Difficulty;
 }
 
-export function GameBoard({ onExitToMenu }: GameBoardProps) {
-  const [state, dispatch] = useReducer(gameReducer, undefined, setupGame);
+export function GameBoard({ onExitToMenu, difficulty }: GameBoardProps) {
+  // Lazy initializer, not `setupGame` passed directly — useReducer only
+  // calls its init function once, on mount, so `difficulty` needs to be
+  // closed over here rather than passed as useReducer's own init-arg
+  // (which would have to be `difficulty` itself, and setupGame would then
+  // need to be usable as `(arg) => GameState` with no override — it
+  // already is, but closing over it here keeps this call self-explanatory
+  // without relying on that shape lining up by coincidence).
+  const [state, dispatch] = useReducer(gameReducer, undefined, () => setupGame(difficulty));
   const [logOpen, setLogOpen] = useState(false);
   const [drawingCard, setDrawingCard] = useState<CardInstance | null>(null);
   const [dragState, dispatchDrag] = useReducer(dragStateReducer, IDLE_DRAG_STATE);
   const [attackState, setAttackState] = useState<AttackState>(IDLE_ATTACK_STATE);
+  const { tokenWidth } = useHandTuning();
   const { player, opponent, phase, turn, activeSide, pendingSacrifices, log, gameOver } = state;
   const topGraveyardCard = player.graveyard[player.graveyard.length - 1];
   const topOpponentGraveyardCard = opponent.graveyard[opponent.graveyard.length - 1];
@@ -136,6 +173,19 @@ export function GameBoard({ onExitToMenu }: GameBoardProps) {
   // not just while actually touching the dark zone. Also used by the FLIP
   // effect below to measure lane token positions.
   const laneZoneRef = useRef<HTMLDivElement>(null);
+  // The invisible flex:1 container each lane's zone sits inside — its
+  // width is the real, unshrinkable "room available" a lane's tokens have
+  // to fit into, which .lane__zone itself can't tell you (it's sized to
+  // its own content, see the comment above). Fed into useShingleOverlap
+  // below so tokens start overlapping exactly once they'd otherwise spill
+  // past it.
+  const laneTokensRef = useRef<HTMLDivElement>(null);
+  const opponentLaneTokensRef = useRef<HTMLDivElement>(null);
+  // A single viewport-fixed layer every particle burst spawns into (see
+  // particles.ts) — one shared layer rather than one per token, since
+  // particles briefly outlive the slide they came from and need to sit
+  // above everything regardless of which token triggered them.
+  const particlesLayerRef = useRef<HTMLDivElement>(null);
   // One DOM node per card currently in the player's lane, keyed by
   // instanceId — measured live during a drag to work out which slot the
   // cursor is over (see computeDropIndex). Populated/cleared by each
@@ -156,6 +206,49 @@ export function GameBoard({ onExitToMenu }: GameBoardProps) {
   // is not a measurement at all, just dnd-kit's own running total of
   // raw pointer movement, so it can't be thrown off the same way.
   const [cursorPos, setCursorPos] = useState<{ x: number; y: number } | null>(null);
+  // The flying card's own DOM node, written to directly by the tilt rAF
+  // loop below (see runDragTiltLoop) rather than through React state —
+  // that loop updates every animation frame regardless of whether a
+  // pointer-move event fired, and routing 60-ish writes/sec through
+  // setState would mean 60-ish re-renders/sec of the whole board for a
+  // value nothing else reads.
+  const dragGhostRef = useRef<HTMLDivElement>(null);
+  // Degrees the flying card currently leans, and the velocity-derived
+  // angle it's easing toward — two separate values (not one) specifically
+  // so the tilt keeps animating toward 0 even once the pointer stops
+  // moving entirely: target decays toward 0 every frame on its own, and
+  // current keeps chasing target every frame, independent of whether a
+  // new move event ever arrives. A single "set tilt on move, otherwise
+  // leave it" version is what got the card stuck at whatever angle it
+  // last had the instant the pointer stopped.
+  const dragTiltRef = useRef(0);
+  const dragTiltTargetRef = useRef(0);
+  const dragTiltRafRef = useRef<number | null>(null);
+  // The pointer position as of the previous move event, purely for the
+  // trail/tilt math below (how far, which direction) — distinct from
+  // cursorPos, which is where the card renders *now*. A ref, not state:
+  // nothing needs to re-render off this by itself, only off cursorPos.
+  const prevDragPointerRef = useRef<{ x: number; y: number } | null>(null);
+
+  // Runs every frame for as long as a drag is in progress: eases the
+  // current tilt toward the target, and separately decays the target
+  // itself toward 0 (a light "friction") so an idle pointer settles the
+  // card level again on its own instead of only updating on new movement.
+  function runDragTiltLoop() {
+    dragTiltTargetRef.current *= DRAG_TILT_DECAY;
+    dragTiltRef.current += (dragTiltTargetRef.current - dragTiltRef.current) * DRAG_TILT_SMOOTHING;
+    dragGhostRef.current?.style.setProperty("--drag-tilt", `${dragTiltRef.current}deg`);
+    dragTiltRafRef.current = requestAnimationFrame(runDragTiltLoop);
+  }
+
+  // Belt-and-suspenders for the rare case of unmounting mid-drag (e.g.
+  // exiting to the main menu) — resetDragTracking handles every normal
+  // end-of-drag path, but nothing calls it on unmount itself.
+  useEffect(() => {
+    return () => {
+      if (dragTiltRafRef.current !== null) cancelAnimationFrame(dragTiltRafRef.current);
+    };
+  }, []);
 
   // A short activation distance so a plain click/tap still registers as a
   // click (see HandFan's onClick) instead of always starting a drag — only
@@ -232,7 +325,7 @@ export function GameBoard({ onExitToMenu }: GameBoardProps) {
   function computeDraftTarget(pointer: { x: number; y: number } | null): string | null {
     if (!pointer) return null;
     for (const card of player.lane) {
-      if (card.tapped || card.drafted) continue;
+      if (card.tapped || hasWarfare(card)) continue;
       const el = laneCardRefs.current.get(card.instanceId);
       if (el && pointInRect(pointer, el.getBoundingClientRect())) return card.instanceId;
     }
@@ -256,10 +349,16 @@ export function GameBoard({ onExitToMenu }: GameBoardProps) {
     // Which of the two drag flows this is (see DragState's own comment) —
     // decided once, up front, from the card itself: a Draft card is
     // dropped on a target, everything else is dropped into the lane.
-    const kind = card && hasDraftAbility(card) ? "draft" : "place";
+    const kind = card && isAttachable(card) ? "draft" : "place";
     dispatchDrag({ type: "start", cardId, kind });
     const start = getEventCoordinates(event.activatorEvent);
     if (start) setCursorPos(start);
+    prevDragPointerRef.current = start ?? null;
+    dragTiltRef.current = 0;
+    dragTiltTargetRef.current = 0;
+    if (dragTiltRafRef.current === null) {
+      dragTiltRafRef.current = requestAnimationFrame(runDragTiltLoop);
+    }
   }
 
   // Draft-target gating lives here, alongside canPlaceWorker just above —
@@ -272,15 +371,36 @@ export function GameBoard({ onExitToMenu }: GameBoardProps) {
   // The dragged Draft card's own cost also has to actually be affordable
   // right now — same "would this drop actually do anything" reasoning as
   // canDraft above, just keyed on the specific card instead of turn state.
+  // Draft's cost has more than one entry (Food and Labor); all of them
+  // have to be covered at once (see components/queries.ts's canAfford).
   function canAffordDraftCard(cardId: string): boolean {
     const card = player.hand.find((c) => c.instanceId === cardId);
-    const cost = card && costOf(card);
-    return !cost || player.resources[cost.resource] >= cost.amount;
+    return canAfford(player.resources, card && costOf(card));
   }
 
   function handleDragMove(event: DragMoveEvent) {
     const pointer = pointerPositionFor(event);
     setCursorPos(pointer);
+
+    // The "shooting star" bit: lean into the direction the card's being
+    // carried, and drop a sprinkle trail along the path it just crossed —
+    // both driven off the same from/to pair, so they always agree on
+    // where the card's actually been. This only ever pushes the tilt
+    // *target* — runDragTiltLoop (a rAF loop, running independently of
+    // move events) is what actually eases dragTiltRef toward it and
+    // decays it back to 0 once the moves stop arriving.
+    const prevPointer = prevDragPointerRef.current;
+    if (pointer && prevPointer) {
+      const dx = pointer.x - prevPointer.x;
+      dragTiltTargetRef.current = Math.max(
+        -DRAG_TILT_MAX_DEG,
+        Math.min(DRAG_TILT_MAX_DEG, dx * DRAG_TILT_SENSITIVITY),
+      );
+      if (particlesLayerRef.current) {
+        spawnTrailParticles(particlesLayerRef.current, prevPointer, pointer);
+      }
+    }
+    prevDragPointerRef.current = pointer;
 
     if (dragState.status === "dragging" && dragState.kind === "draft") {
       const canDropHere = canDraft && canAffordDraftCard(dragState.cardId);
@@ -296,6 +416,19 @@ export function GameBoard({ onExitToMenu }: GameBoardProps) {
     dispatchDrag({ type: "movePlace", overLane, dropIndex: dropIndexFor(overLane, pointer) });
   }
 
+  // Shared by every way a drag can stop (dropped, cancelled) — clears the
+  // tilt/trail tracking alongside cursorPos so a fresh drag starts level
+  // and doesn't spawn a trail from wherever the pointer happens to already
+  // be relative to the last drag's end point.
+  function resetDragTracking() {
+    setCursorPos(null);
+    prevDragPointerRef.current = null;
+    if (dragTiltRafRef.current !== null) {
+      cancelAnimationFrame(dragTiltRafRef.current);
+      dragTiltRafRef.current = null;
+    }
+  }
+
   function handleDragEnd(event: DragEndEvent) {
     // Read where it landed before "end" wipes the drag state, not after —
     // once it's "idle" there's no longer a dragged card to have an
@@ -307,7 +440,7 @@ export function GameBoard({ onExitToMenu }: GameBoardProps) {
       const canDropHere = canDraft && canAffordDraftCard(dragState.cardId);
       const targetId = canDropHere ? computeDraftTarget(pointerPositionFor(event)) : null;
       dispatchDrag({ type: "end" });
-      setCursorPos(null);
+      resetDragTracking();
       if (targetId) {
         dispatch({ type: "DRAFT", cardInstanceId: String(event.active.id), targetInstanceId: targetId });
       }
@@ -317,7 +450,7 @@ export function GameBoard({ onExitToMenu }: GameBoardProps) {
     const droppedOnLane = canPlaceWorker && isOverLaneRect(event);
     const index = dropIndexFor(droppedOnLane, pointerPositionFor(event)) ?? undefined;
     dispatchDrag({ type: "end" });
-    setCursorPos(null);
+    resetDragTracking();
     if (droppedOnLane) {
       dispatch({ type: "PLACE_WORKER", instanceId: String(event.active.id), index });
     }
@@ -330,7 +463,7 @@ export function GameBoard({ onExitToMenu }: GameBoardProps) {
   // forever, leaving the source card dimmed with no way back.
   function handleDragCancel(_event: DragCancelEvent) {
     dispatchDrag({ type: "end" });
-    setCursorPos(null);
+    resetDragTracking();
   }
 
   // Set right before dispatching a Draw-phase ADVANCE; consumed by the
@@ -400,22 +533,27 @@ export function GameBoard({ onExitToMenu }: GameBoardProps) {
   // The opponent has no button to click — its own Warfare phase plays the
   // identical swing/resolve/dying sequence automatically, after a brief
   // pause so it reads as a deliberate beat rather than an instant cut.
-  // But only when it actually has something to attack with: RESOLVE_WARFARE
-  // compares both sides' *current* front lines regardless of who triggered
-  // it, so dispatching it with a 0 front line wouldn't be a no-op — the
-  // player's own leftover Warfare, if any, would still "win" and rout the
-  // opponent on a turn where the opponent never chose to fight at all.
-  // With nothing to attack with, this just skips straight to ADVANCE, the
-  // same as the player clicking "Next" to decline.
+  // But only when its difficulty's own policy actually wants to fight
+  // (see ai.ts's shouldOpponentAttack — "dumb" swings with anything it
+  // has, "hard" only when it's winning, etc.): RESOLVE_WARFARE compares
+  // both sides' *current* front lines regardless of who triggered it, so
+  // dispatching it on a decline wouldn't be a no-op — the player's own
+  // leftover Warfare, if any, would still "win" and rout the opponent on
+  // a turn where the opponent never chose to fight at all. Declining just
+  // skips straight to ADVANCE, the same as the player clicking "Next".
   useEffect(() => {
     if (phase !== "warfare" || activeSide !== "opponent" || attackState.status !== "idle") return;
-    if (frontLine(opponent.lane) === 0) {
+    // shouldOpponentAttack reads both sides' front lines (see its own
+    // comment — the decision depends on the matchup, not just what the
+    // opponent itself has), so this now has to watch player.lane too, not
+    // just opponent.lane.
+    if (!shouldOpponentAttack(state)) {
       const t = setTimeout(() => dispatch({ type: "ADVANCE" }), 500);
       return () => clearTimeout(t);
     }
     const t = setTimeout(() => setAttackState({ status: "swinging" }), 500);
     return () => clearTimeout(t);
-  }, [phase, activeSide, attackState.status, opponent.lane]);
+  }, [phase, activeSide, attackState.status, opponent.lane, player.lane]);
 
   // While a fight's result is still animating, the lane renders from this
   // snapshot instead of the real (already-updated) state — see
@@ -441,6 +579,21 @@ export function GameBoard({ onExitToMenu }: GameBoardProps) {
   } else {
     displayPlayerLane.forEach((card) => laneItems.push({ id: card.instanceId, kind: "card", card }));
   }
+
+  const laneShingleOverlap = useShingleOverlap(
+    laneTokensRef,
+    laneItems.length,
+    tokenWidth,
+    LANE_BASE_GAP,
+    LANE_MIN_PEEK,
+  );
+  const opponentLaneShingleOverlap = useShingleOverlap(
+    opponentLaneTokensRef,
+    displayOpponentLane.length,
+    tokenWidth,
+    LANE_BASE_GAP,
+    LANE_MIN_PEEK,
+  );
 
   // FLIP (First-Last-Invert-Play): plain flexbox reflow when a ghost slot
   // is inserted/moves is an instant jump, not a slide — browsers don't
@@ -474,6 +627,9 @@ export function GameBoard({ onExitToMenu }: GameBoardProps) {
           child.getBoundingClientRect();
           child.style.transition = "transform 0.18s ease";
           child.style.transform = "";
+          if (particlesLayerRef.current) {
+            spawnMoveParticles(particlesLayerRef.current, rect.left + rect.width / 2, rect.top + rect.height / 2);
+          }
         }
       }
     }
@@ -528,6 +684,7 @@ export function GameBoard({ onExitToMenu }: GameBoardProps) {
         onDragCancel={handleDragCancel}
       >
       <div className="board">
+        <div className="board-particles" ref={particlesLayerRef} />
         <div className="corner corner--top-left">
           <div className="resource-chip">
             <FoodBadge /> {opponent.resources.Food}
@@ -632,8 +789,11 @@ export function GameBoard({ onExitToMenu }: GameBoardProps) {
                 count={opponent.graveyard.length}
                 topLabel={topOpponentGraveyardCard && definitionOf(topOpponentGraveyardCard).name}
               />
-              <div className="lane__tokens lane__tokens--reversed">
-                <div className="lane__zone lane__zone--reversed">
+              <div className="lane__tokens lane__tokens--reversed" ref={opponentLaneTokensRef}>
+                <div
+                  className="lane__zone lane__zone--reversed"
+                  style={{ "--shingle-overlap": `${opponentLaneShingleOverlap}px` } as CSSProperties}
+                >
                   {displayOpponentLane.length > 0 ? (
                     displayOpponentLane.map((card) => (
                       <div
@@ -679,8 +839,15 @@ export function GameBoard({ onExitToMenu }: GameBoardProps) {
           <div className="playfield">
             <div className="lane-row lane-row--main">
               <PileView kind="deck" count={player.deck.length} />
-              <div className={`lane__tokens ${isOverLane ? "lane__tokens--drop-active" : ""}`}>
-                <div className="lane__zone" ref={laneZoneRef}>
+              <div
+                className={`lane__tokens ${isOverLane ? "lane__tokens--drop-active" : ""}`}
+                ref={laneTokensRef}
+              >
+                <div
+                  className="lane__zone"
+                  ref={laneZoneRef}
+                  style={{ "--shingle-overlap": `${laneShingleOverlap}px` } as CSSProperties}
+                >
                   {laneItems.length > 0 ? (
                     laneItems.map((item) => {
                       if (item.kind === "ghost") {
@@ -703,13 +870,22 @@ export function GameBoard({ onExitToMenu }: GameBoardProps) {
                       const { card } = item;
                       const inUpkeep =
                         phase === "upkeep" && activeSide === "player" && pendingSacrifices > 0;
-                      // Drafted cards don't tap for a resource anymore
-                      // (see Rules/Drafting Population Risk.md) — their
-                      // only turn action is the not-yet-built move (Rules/
-                      // Drafted Warfare Turn Action.md), so this card's own
-                      // click does nothing for them once drafted.
+                      // A drafted card still taps for its resource exactly
+                      // like any other Worker (see Rules/Drafting
+                      // Population Risk.md) — tapping it is also what
+                      // excludes it from this turn's front line (Rules/
+                      // Turned Warfare Exclusion.md), so it's a real
+                      // choice, not a dead click. Gated on
+                      // resourceGeneratedBy too, not just tapped: a
+                      // Draft attachment's penalty can zero a Basic
+                      // Worker's output entirely (see components/
+                      // queries.ts), and a card with nothing to generate
+                      // shouldn't look clickable.
                       const canTap =
-                        phase === "main" && activeSide === "player" && !card.tapped && !card.drafted;
+                        phase === "main" &&
+                        activeSide === "player" &&
+                        !card.tapped &&
+                        !!resourceGeneratedBy(card);
                       const onClick = inUpkeep
                         ? () => dispatch({ type: "SACRIFICE_WORKER", instanceId: card.instanceId })
                         : canTap
@@ -854,9 +1030,18 @@ export function GameBoard({ onExitToMenu }: GameBoardProps) {
           transform) instead of via <DragOverlay> — see cursorPos's own
           definition for why. translate(-50%,-50%) needs no size
           measurement at all to center the card on the cursor, unlike
-          dnd-kit's own positioning system. */}
+          dnd-kit's own positioning system.
+
+          Wrapped in .drag-ghost so index.css can style "currently airborne"
+          (lift, velocity tilt, ground shadow, hold-bob) without that
+          becoming a CardView prop for what's still this one call site.
+          --drag-tilt isn't set here — runDragTiltLoop writes it straight
+          to this node every frame via dragGhostRef (see its own comment
+          for why that's a ref-write and not a piece of React state). */}
       {draggingCard && cursorPos && (
         <div
+          ref={dragGhostRef}
+          className="drag-ghost"
           style={
             {
               position: "fixed",
@@ -869,6 +1054,7 @@ export function GameBoard({ onExitToMenu }: GameBoardProps) {
             } as CSSProperties
           }
         >
+          <div className="drag-ghost__shadow" />
           <CardView card={draggingCard} variant="lane" noPreview />
         </div>
       )}

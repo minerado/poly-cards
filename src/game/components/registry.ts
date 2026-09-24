@@ -37,11 +37,24 @@ export const CARD_REGISTRY: Record<string, CardDefinition> = {
     // No dedicated art yet — reusing the card back as a placeholder face
     // until this gets real illustration.
     image: asset("cards/card-back.png"),
-    description: "Cost: 1 [labor-badge]\nFlip a target untapped Worker into Warfare.",
+    // Cost isn't restated here — it's shown as corner badges instead (see
+    // CardView.tsx's CardFace, MTG-style top-right pips), so the rules
+    // text only needs to say what the card *does*.
+    description: "Applies +1 [warfare-badge] / -1 [food-badge] / -1 [labor-badge] to an untapped Worker.",
     components: {
-      cardTypes: { general: "Action", specific: [] },
-      draftAbility: true,
-      cost: { resource: "Labor", amount: 1 },
+      // Order: a card that attaches to a target and stays there instead
+      // of resolving once — see Concepts/Orders.md.
+      cardTypes: { general: "Order", specific: ["Draft"] },
+      attachable: true,
+      grantsWarfare: true,
+      resourceGeneratorPenalty: [
+        { resource: "Food", amount: 1 },
+        { resource: "Labor", amount: 1 },
+      ],
+      cost: [
+        { resource: "Food", amount: 2 },
+        { resource: "Labor", amount: 1 },
+      ],
     },
   },
 };

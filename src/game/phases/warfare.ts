@@ -1,15 +1,20 @@
+import { hasWarfare } from "../components/queries";
 import { withLog } from "../helpers";
 import type { CardInstance, PlayerState } from "../types";
 import type { PhaseDef } from "./types";
 
 /**
- * A side's attacking Warfare total: the contiguous run of untapped,
- * drafted cards starting at the very front of the lane — see
- * Rules/Front-Line Warfare.md. Stops at the first card that isn't
- * drafted, or is tapped; anything behind that point doesn't count, even
- * if it's untapped Warfare itself (a "country border" — it never reaches
- * the front to fight). Exported so GameBoard can decide whether there's
- * anything to show a sword for, using the exact same rule.
+ * A side's attacking Warfare total: the contiguous run of untapped cards
+ * carrying Warfare, starting at the very front of the lane — see
+ * Rules/Front-Line Warfare.md. A drafted card is still whatever Worker it
+ * always was (see types.ts's CardInstance.attachments) — this just counts
+ * which of them currently carry Warfare (hasWarfare) and are free to use
+ * it. Stops at the first card that doesn't have Warfare, or is tapped
+ * (including one tapped for its own resource this same turn — see
+ * Rules/Turned Warfare Exclusion.md); anything behind that point doesn't
+ * count, even if it has Warfare itself (a "country border" — it never
+ * reaches the front to fight). Exported so GameBoard can decide whether
+ * there's anything to show a sword for, using the exact same rule.
  *
  * The lane array's *end* is the front — new cards are appended there by
  * default (Rules/Deployment Placement.md's "back of the line" is index 0,
@@ -21,7 +26,7 @@ export function frontLine(lane: CardInstance[]): number {
   let count = 0;
   for (let i = lane.length - 1; i >= 0; i--) {
     const card = lane[i];
-    if (!card.drafted || card.tapped) break;
+    if (!hasWarfare(card) || card.tapped) break;
     count += 1;
   }
   return count;
@@ -45,7 +50,10 @@ export function frontLine(lane: CardInstance[]): number {
  *  further back. Returns the destroyed cards too, so callers can report
  *  an accurate count — `count` itself is only a ceiling, since tapped
  *  Warfare and a short lane can both mean fewer cards actually die than
- *  requested.
+ *  requested. A destroyed card's attachments (see types.ts's
+ *  CardInstance.attachments) go to the graveyard as part of it — nested
+ *  inside the same object, not tracked separately, so no extra code is
+ *  needed here for that to happen correctly.
  */
 function destroyFront(
   side: PlayerState,
@@ -56,7 +64,7 @@ function destroyFront(
   let remaining = count;
   for (let i = side.lane.length - 1; i >= 0 && remaining > 0; i--) {
     const card = side.lane[i];
-    if (card.drafted && card.tapped) continue;
+    if (hasWarfare(card) && card.tapped) continue;
     destroyedIds.add(card.instanceId);
     remaining -= 1;
   }

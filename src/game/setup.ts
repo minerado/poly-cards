@@ -1,6 +1,6 @@
 import { buildStarterDeck } from "./cards";
 import { draw } from "./helpers";
-import type { GameState, PlayerState, Side } from "./types";
+import type { Difficulty, GameState, PlayerState, Side } from "./types";
 
 const STARTING_HAND_SIZE = 7;
 
@@ -26,7 +26,7 @@ function dealFreshHand(): PlayerState {
   };
 }
 
-export function setupGame(): GameState {
+export function setupGame(difficulty: Difficulty = "normal"): GameState {
   const player = dealFreshHand();
   // The opponent's own deck, dealt the same way — not a copy or a mirror of
   // the player's, a genuinely separate shuffle (see buildStarterDeck).
@@ -44,6 +44,7 @@ export function setupGame(): GameState {
     modifiers: { freeWorkerPlacement: true },
     player,
     opponent,
+    difficulty,
     pendingSacrifices: 0,
     log: [
       `Game start: drew a ${STARTING_HAND_SIZE}-card hand.`,

@@ -1,5 +1,5 @@
 import type { ComponentType, ReactNode } from "react";
-import { FoodBadge, LaborBadge } from "./ResourceBadges";
+import { FoodBadge, LaborBadge, WarfareBadge } from "./ResourceBadges";
 import { TurnBadge } from "./TurnBadge";
 
 /**
@@ -13,6 +13,7 @@ const BADGE_TOKENS: Record<string, ComponentType> = {
   "[turn]": TurnBadge,
   "[food-badge]": FoodBadge,
   "[labor-badge]": LaborBadge,
+  "[warfare-badge]": WarfareBadge,
 };
 
 const TOKEN_PATTERN = new RegExp(

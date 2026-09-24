@@ -10,10 +10,15 @@ export const endPhase: PhaseDef = {
   reduce(state, action, ctx) {
     if (action.type !== "ADVANCE") return undefined;
 
+    // Tapped cards deliberately do NOT untap here — a card tapped this
+    // turn needs to stay tapped through the other side's entire
+    // intervening turn (that's the whole downside of tapping something),
+    // so untapping happens at the *start* of this side's own next turn
+    // instead — see untap.ts, first in TURN_PHASES, which is exactly what
+    // ctx.nextAfter("end") resolves to below.
     const active = activePlayerState(state);
     const updated: PlayerState = {
       ...active,
-      lane: active.lane.map((c) => ({ ...c, tapped: false })),
       resources: { Food: 0, Labor: 0 },
       hasPlacedWorkerThisTurn: false,
       hasDraftedThisTurn: false,
@@ -35,7 +40,7 @@ export const endPhase: PhaseDef = {
 
     return withLog(
       { ...stateAfterReset, activeSide: nextActiveSide, turn, phase: next },
-      `${nextActiveSide === "player" ? "Your" : "Opponent's"} turn (Turn ${turn}) — Draw phase.`
+      `${nextActiveSide === "player" ? "Your" : "Opponent's"} turn (Turn ${turn}) — Untap phase.`
     );
   },
 };

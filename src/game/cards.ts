@@ -4,7 +4,7 @@ let nextInstanceId = 0;
 
 function createInstance(defId: string): CardInstance {
   nextInstanceId += 1;
-  return { instanceId: `${defId}-${nextInstanceId}`, defId, tapped: false, drafted: false };
+  return { instanceId: `${defId}-${nextInstanceId}`, defId, tapped: false, attachments: [] };
 }
 
 /** Starter deck: 10 Farmers, 10 Builders, 5 Drafts. */
