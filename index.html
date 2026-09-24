@@ -3,7 +3,16 @@
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!--
+      Fixed desktop-width viewport, not "width=device-width": the board
+      layout is built for a real desktop viewport (fixed-px cards/badges,
+      vh/vw tied to actual screen size) with no mobile breakpoints. Mobile
+      browsers honor `width=N` by laying the page out at N CSS px and then
+      zooming the whole render out to fit the screen — same proportions as
+      desktop, just shrunk. Desktop browsers ignore this tag entirely, so
+      it has no effect there.
+    -->
+    <meta name="viewport" content="width=1280" />
     <title>Poly Cards — v0</title>
   </head>
   <body>
