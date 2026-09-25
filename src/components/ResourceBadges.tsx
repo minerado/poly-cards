@@ -31,11 +31,10 @@ export function ResourceBadge({ resource }: { resource: ResourceType }) {
   return resource === "Food" ? <FoodBadge /> : <LaborBadge />;
 }
 
-/** The Warfare glyph — used in card rules text via cardMarkup.tsx's
- *  `[warfare-badge]` token (see the Draft card's own description). Not
- *  used on a card's own face: a drafted Worker's face never changes (see
- *  CardView.tsx) — the only on-board sign of a Draft attachment is the
- *  card peeking out behind its host. */
+/** The Warfare glyph — shown in a drafted card's own token resourcebar
+ *  (see CardView.tsx's tokenWarfare) and in card rules text via
+ *  cardMarkup.tsx's `[warfare-badge]` token (see the Draft card's own
+ *  description). */
 export function WarfareBadge() {
   return (
     <RoundBadge className="round-badge--warfare">

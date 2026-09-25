@@ -1,10 +1,10 @@
 import { forwardRef } from "react";
 import type { ButtonHTMLAttributes, CSSProperties } from "react";
-import { definitionOf, resourceGeneratedBy, typeLineOf } from "../game/components/queries";
+import { definitionOf, hasWarfare, resourceGeneratedBy, typeLineOf } from "../game/components/queries";
 import type { CardDefinition, ResourceGenerator } from "../game/components/types";
 import type { CardInstance } from "../game/types";
 import { withBadges } from "./cardMarkup";
-import { ResourceBadge } from "./ResourceBadges";
+import { ResourceBadge, WarfareBadge } from "./ResourceBadges";
 
 const LANE_JITTER_MAX_DEG = 5;
 
@@ -79,6 +79,7 @@ function CardFace({
   def,
   showDetails,
   resourceGenerator,
+  warfare,
 }: {
   def: CardDefinition;
   showDetails: boolean;
@@ -90,9 +91,14 @@ function CardFace({
    *  actually generate. Undefined = nothing to show, whether because the
    *  card never generated anything or because an attachment zeroed it out. */
   resourceGenerator?: ResourceGenerator;
+  /** This instance currently carries Warfare (see components/queries.ts's
+   *  hasWarfare) — shown as its own badge on the token, alongside the
+   *  resource badge when there still is one. */
+  warfare?: boolean;
 }) {
   const typeLine = showDetails ? typeLineOf(def) : undefined;
   const tokenResource = !showDetails ? resourceGenerator : undefined;
+  const tokenWarfare = !showDetails && warfare;
   const cost = showDetails ? def.components.cost : undefined;
 
   return (
@@ -119,9 +125,10 @@ function CardFace({
       <div className="card__artbox">
         <img className="card__image" src={def.image} alt={def.name} draggable={false} />
       </div>
-      {tokenResource && (
+      {(tokenResource || tokenWarfare) && (
         <div className="card__resourcebar">
-          <ResourceBadge resource={tokenResource.resource} />
+          {tokenResource && <ResourceBadge resource={tokenResource.resource} />}
+          {tokenWarfare && <WarfareBadge />}
         </div>
       )}
       {showDetails && (
@@ -173,6 +180,7 @@ export const CardView = forwardRef<HTMLButtonElement, CardViewProps>(function Ca
 
   const def = definitionOf(card);
   const effectiveResourceGenerator = resourceGeneratedBy(card);
+  const warfare = hasWarfare(card);
   const cardButton = (
     <button
       ref={ref}
@@ -183,7 +191,12 @@ export const CardView = forwardRef<HTMLButtonElement, CardViewProps>(function Ca
       style={style}
       {...buttonProps}
     >
-      <CardFace def={def} showDetails={!isToken} resourceGenerator={effectiveResourceGenerator} />
+      <CardFace
+        def={def}
+        showDetails={!isToken}
+        resourceGenerator={effectiveResourceGenerator}
+        warfare={warfare}
+      />
     </button>
   );
 
@@ -197,12 +210,10 @@ export const CardView = forwardRef<HTMLButtonElement, CardViewProps>(function Ca
       {/* Each attachment (see types.ts's CardInstance.attachments — e.g. a
           Draft Order) renders as a small plate peeking out from behind the
           host card, stacked deepest-first so the most recent attachment
-          sits nearest the front. That peeking plate is the *only* visual
-          the host card itself gets — no badge, no border change to the
-          card's own face (the user doesn't want a drafted Worker's card
-          detail to look any different from an undrafted one, beyond
-          whatever an attachment's own effect already changes, like a
-          zeroed resource badge). Purely decorative (aria-hidden). */}
+          sits nearest the front. Purely decorative (aria-hidden) — the
+          Warfare badge in the token's own resourcebar (see tokenWarfare
+          above) is the actual "this is drafted" signal; the host's full-
+          detail card (hand/preview) still never changes beyond that. */}
       {card.attachments.length > 0 && (
         <div className="card__attachments" aria-hidden="true">
           {card.attachments.map((attachment, i) => (
@@ -216,7 +227,7 @@ export const CardView = forwardRef<HTMLButtonElement, CardViewProps>(function Ca
       )}
       {cardButton}
       <div className="card card__preview">
-        <CardFace def={def} showDetails resourceGenerator={effectiveResourceGenerator} />
+        <CardFace def={def} showDetails resourceGenerator={effectiveResourceGenerator} warfare={warfare} />
       </div>
     </div>
   );
